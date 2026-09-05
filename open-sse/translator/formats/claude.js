@@ -27,6 +27,14 @@ export function lastCacheableToolIndex(tools) {
 // Check if message has valid non-empty content
 export function hasValidContent(msg) {
   if (typeof msg.content === "string" && msg.content.trim()) return true;
+  if (msg.content && typeof msg.content === "object" && !Array.isArray(msg.content)) {
+    const block = msg.content;
+    return !!((block.type === CLAUDE_BLOCK.TEXT && block.text?.trim()) ||
+      block.type === CLAUDE_BLOCK.TOOL_USE ||
+      block.type === CLAUDE_BLOCK.TOOL_RESULT ||
+      block.type === CLAUDE_BLOCK.IMAGE ||
+      block.type === CLAUDE_BLOCK.DOCUMENT);
+  }
   if (Array.isArray(msg.content)) {
     return msg.content.some(block =>
       (block.type === CLAUDE_BLOCK.TEXT && block.text?.trim()) ||
@@ -37,6 +45,31 @@ export function hasValidContent(msg) {
     );
   }
   return false;
+}
+// Content may arrive as a single content block object (spec allows string | array;
+// some clients send the bare object). Treat it as a one-block array so marker
+// counting, stripping, and the wire format all see the same shape.
+function normalizeMessageContent(msg) {
+  if (msg?.content && typeof msg.content === "object" && !Array.isArray(msg.content)) {
+    msg.content = [msg.content];
+  }
+  return msg;
+}
+
+// Total blocks carrying cache_control across system, tools, and messages — the
+// upstream Messages API allows at most 4 markers per request.
+function countCacheControlBlocks(body) {
+  let n = 0;
+  if (Array.isArray(body?.system)) for (const b of body.system) if (b?.cache_control) n++;
+  if (Array.isArray(body?.tools)) for (const t of body.tools) if (t?.cache_control) n++;
+  if (Array.isArray(body?.messages)) {
+    for (const m of body.messages) {
+      if (Array.isArray(m?.content)) {
+        for (const b of m.content) if (b?.cache_control) n++;
+      } else if (m?.content && typeof m.content === "object" && m.content.cache_control) n++;
+    }
+  }
+  return n;
 }
 
 // Fix tool_use/tool_result ordering for Claude API
@@ -271,6 +304,10 @@ function markLastCacheableBlock(msg) {
 // (normalize, tool dedupe, token savers) — otherwise the anchor drifts off the tail.
 export function anchorClaudeCache(body) {
   if (!body || typeof body !== "object") return body;
+  // The client may already carry up to 4 markers (the upstream per-request cap).
+  // Re-anchoring past a spent budget can only exceed it; every remaining client
+  // marker is itself a valid breakpoint — skip re-anchoring.
+  if (countCacheControlBlocks(body) >= 4) return body;
 
   if (Array.isArray(body.system)) {
     const last = body.system.length - 1;
@@ -290,6 +327,7 @@ export function anchorClaudeCache(body) {
   }
 
   if (Array.isArray(body.messages)) {
+    for (const msg of body.messages) normalizeMessageContent(msg);
     let anchored = null;
     for (let i = body.messages.length - 1; i >= 0; i--) {
       const msg = body.messages[i];
@@ -368,6 +406,7 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
     // Pass 1: remove cache_control + filter empty messages
     for (let i = 0; i < len; i++) {
       const msg = body.messages[i];
+      normalizeMessageContent(msg);
 
       // Remove cache_control from content blocks
       if (Array.isArray(msg.content)) {
