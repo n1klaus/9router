@@ -1,0 +1,161 @@
+{
+  "completed": true,
+  "coverageSuggestions": [
+    {
+      "area": "Full cache-marker budget",
+      "gapKind": "single_point",
+      "requirement": "A translated Claude request must never carry more than four cache-control markers, including when the client has already used the full four-marker budget.",
+      "sourceIfAdded": "Prompt-stated",
+      "suggestion": "Add a case whose input genuinely has four client markers, then verify the dispatched result remains at most four. Fix the test helper to accept and spread an `extra` argument so the intended tool marker is actually present. Varying marker placement would prevent a shortcut tied only to the current three-marker arrangement."
+    },
+    {
+      "area": "Single-object block varieties and roles",
+      "gapKind": "single_point",
+      "requirement": "Single content-block objects must be retained, wrapped as one-element arrays, and stripped of client cache-control markers.",
+      "sourceIfAdded": "Prompt-stated",
+      "suggestion": "Exercise at least one non-text single block and a marked assistant single block through the final translation path, asserting retention, one-element normalization, and marker removal. The current preparation assertions cover only text blocks and marker stripping only on a user turn."
+    },
+    {
+      "area": "Array-content regression preservation",
+      "gapKind": "untested",
+      "requirement": "Messages already using array content must translate exactly as they did before.",
+      "sourceIfAdded": "Prompt-stated",
+      "suggestion": "Pass representative array-content messages through translation and deep-compare their non-cache output structure and ordering to the established pre-fix behavior. Current tests use array turns as context but never assert that their content remains unchanged."
+    }
+  ],
+  "error": "",
+  "executionTimeSeconds": 181.955127,
+  "message": "1 test flagged as not fair.",
+  "overall": "FAIL: eight of the nine logically distinct assertion groups are fair, but the assistant-array assertion on a direct `anchorClaudeCache` call is not. The required final upstream shape is prompt-stated, yet the hidden assertion additionally dictates that the cache-anchor helper, rather than the repository’s separate passthrough normalization stage, perform the wrapping. No suite-wide timing, randomness, ordering, environment, or hidden-fixture concerns were found. Coverage gaps below are advisory and do not affect this fairness verdict.",
+  "requirements": [
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "never emits more than four markers — `countMarkers(out) <= 4`"
+      ],
+      "requirement": "A translated Claude request must never carry more than four cache-control markers, including when the client has already used the full four-marker budget.",
+      "sourceQuote": "“after this fix a translated request never carries more than four cache_control markers”"
+    },
+    {
+      "covered": "yes",
+      "coveringTests": [
+        "wraps and anchors assistant turn — `countMarkers(out) === 1`",
+        "prepareClaudeRequest re-anchor count — `countMarkers(out) === 1`"
+      ],
+      "requirement": "When the client has remaining marker budget, the router must continue adding its own cache breakpoints.",
+      "sourceQuote": "“when the client has not spent its budget the router still adds its own breakpoints”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "keeps marked single-object turn — `kept.length === 1`",
+        "drops no single-text-object turns — `out.messages.length === 3`"
+      ],
+      "requirement": "A conversation turn whose content is one block object must be retained.",
+      "sourceQuote": "“after this fix such a turn is kept”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "wraps a single-object assistant turn — assistant exists and `Array.isArray(assistant.content) === true`",
+        "normalizes marked single-object turn — `kept[0].content` has length 1",
+        "drops no single-text-object turns — first message content is an array"
+      ],
+      "requirement": "A retained single content object must be delivered upstream as a one-element array.",
+      "sourceQuote": "“delivered to the upstream API as a one-element array”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "strips marked single-object turn — first block `cache_control` is undefined"
+      ],
+      "requirement": "A client-provided cache-control marker on single-object content must be removed.",
+      "sourceQuote": "“any cache_control marker the client placed on it is removed”"
+    },
+    {
+      "covered": "no",
+      "coveringTests": [],
+      "requirement": "Messages already using array content must translate exactly as they did before.",
+      "sourceQuote": "“Normal turns with array content must continue to translate exactly as before.”"
+    }
+  ],
+  "taskSummary": "The task asks for two Claude request-translation fixes. First, final upstream requests must contain at most four `cache_control` markers; existing router breakpoints should still be added when the client has remaining marker budget. Second, a message whose `content` is one block object must not be filtered out: the upstream form must retain the turn, normalize the object to a one-element array, and remove a client-provided marker from that block. Existing array-content translation must remain unchanged. The relevant integration paths are `prepareClaudeRequest` for translated Claude requests and `normalizeClaudePassthrough` followed by `anchorClaudeCache` for native-Claude passthrough requests.",
+  "tests": [
+    {
+      "concerns": [],
+      "evidence": "The prompt explicitly requires that “a translated request never carries more than four cache_control markers.” The tested helper is the final passthrough anchoring operation: `open-sse/handlers/chatCore.js:300-302` calls `anchorClaudeCache` after other reshaping, and `open-sse/translator/formats/claude.js:267-272` describes it as the re-anchoring policy that runs last.",
+      "fairness": "Prompt-stated",
+      "name": "never emits more than four markers — `countMarkers(out) <= 4`",
+      "qualityCheck": "Fair, but the setup does not actually contain four client markers: `tool` accepts only `name`, so `tool(\"t2\", { cache_control: CC })` silently ignores the second argument. The input has three client markers, although the old implementation still reaches five after adding router markers. Thus it catches this regression but does not directly exercise the prompt’s stated already-four-marker scenario.",
+      "verifies": "After calling `anchorClaudeCache`, the total markers counted across system blocks, tools, array message blocks, and bare-object message content is at most 4."
+    },
+    {
+      "concerns": [
+        "internal_coupling"
+      ],
+      "evidence": "The prompt requires the final upstream request to use a one-element array, but does not assign that normalization to `anchorClaudeCache`. Searches for `one-element`, `single object`, `content: text(`, `Array.isArray(msg.content)`, `anchorClaudeCache`, and `normalizeClaudePassthrough` across source, tests, docs, and docstrings found no pre-existing contract that `anchorClaudeCache` performs shape normalization. On the contrary, `open-sse/translator/formats/claude.js:267-271` says anchoring runs after steps that reshape messages, while `open-sse/handlers/chatCore.js:188-190` calls the explicitly named `normalizeClaudePassthrough` before the final anchor at `open-sse/handlers/chatCore.js:300-302`. A grounded alternative is to normalize single objects in `normalizeClaudePassthrough`; that produces the prompt-required dispatched body but fails this direct-helper assertion.",
+      "fairness": "Not fair",
+      "name": "wraps a single-object assistant turn — assistant exists and `Array.isArray(assistant.content) === true`",
+      "qualityCheck": "The end behavior is required, but the assertion pins an unstated implementation boundary. It couples content normalization to the cache-anchor helper even though the visible pipeline has a separate normalization stage.",
+      "verifies": "A role-`assistant` message remains findable after direct invocation of `anchorClaudeCache`, and that helper itself has changed its bare content object into an array."
+    },
+    {
+      "concerns": [],
+      "evidence": "The exact count follows the visible anchoring policy in `open-sse/translator/formats/claude.js:267-270`: last tool plus last system plus last assistant, with this setup containing neither tools nor system. `open-sse/translator/formats/claude.js:296-313` produces one message anchor by preferring the last assistant and using a fallback only if none was anchored. The prompt additionally says the router must still add its breakpoints when budget remains.",
+      "fairness": "Repo-discoverable",
+      "name": "wraps and anchors assistant turn — `countMarkers(out) === 1`",
+      "qualityCheck": "Fair but shallow: counting one marker does not establish that it is on the assistant turn named by the test. A solution placing the marker on the final user block could pass.",
+      "verifies": "For a body with no system or tools and one bare assistant block between array user turns, direct `anchorClaudeCache` output contains exactly one marker in total; the assertion does not constrain which block carries it."
+    },
+    {
+      "concerns": [],
+      "evidence": "The prompt explicitly says “such a turn is kept.” In this setup `u1` uniquely identifies that turn.",
+      "fairness": "Prompt-stated",
+      "name": "keeps marked single-object turn — `kept.length === 1`",
+      "qualityCheck": "Fair. The JSON-substring lookup is less precise than inspecting block fields and could become ambiguous if another controlled field contained `u1`, but the present fixture is deterministic and unambiguous.",
+      "verifies": "After `prepareClaudeRequest`, exactly one output message has serialized content containing the controlled text `u1`; therefore the marked single-object user turn was not dropped or duplicated."
+    },
+    {
+      "concerns": [],
+      "evidence": "The prompt explicitly requires a single content block object to be “delivered to the upstream API as a one-element array.”",
+      "fairness": "Prompt-stated",
+      "name": "normalizes marked single-object turn — `kept[0].content` has length 1",
+      "qualityCheck": "A direct and discriminating assertion of the required output shape.",
+      "verifies": "The retained `u1` message has array-like content of exactly one element."
+    },
+    {
+      "concerns": [],
+      "evidence": "The prompt explicitly requires that “any cache_control marker the client placed on it is removed.”",
+      "fairness": "Prompt-stated",
+      "name": "strips marked single-object turn — first block `cache_control` is undefined",
+      "qualityCheck": "A direct and discriminating assertion of the required marker removal.",
+      "verifies": "The sole normalized `u1` content block has no `cache_control` property after `prepareClaudeRequest`."
+    },
+    {
+      "concerns": [],
+      "evidence": "The prompt says a turn with a single content block object “is kept.” Since no same-role merge applies in this alternating three-turn setup, keeping all input turns yields exactly three output messages.",
+      "fairness": "Prompt-stated",
+      "name": "drops no single-text-object turns — `out.messages.length === 3`",
+      "qualityCheck": "Fair and checks both user and assistant bare-object turns together, though it only covers text blocks.",
+      "verifies": "Given three alternating turns, two with bare text-block objects and one with array content, `prepareClaudeRequest` returns exactly three messages."
+    },
+    {
+      "concerns": [],
+      "evidence": "The prompt explicitly requires delivery of the single object as a one-element array; this assertion checks the array part for the first bare-object user turn. The neighboring length assertion supplies the one-element check in a separate test.",
+      "fairness": "Prompt-stated",
+      "name": "drops no single-text-object turns — first message content is an array",
+      "qualityCheck": "Fair but incomplete in isolation: it checks only the first user turn and not array length or assistant normalization.",
+      "verifies": "The first returned message’s `content` is an array after `prepareClaudeRequest`. The assertion does not check its length, contents, or the assistant message’s shape."
+    },
+    {
+      "concerns": [],
+      "evidence": "The prompt requires router breakpoints when budget remains. The exact one-marker form is produced by the visible request-preparation policy: `open-sse/translator/formats/claude.js:397-414` adds one marker to the last eligible block of the last assistant and no system/tool markers exist in this setup.",
+      "fairness": "Repo-discoverable",
+      "name": "prepareClaudeRequest re-anchor count — `countMarkers(out) === 1`",
+      "qualityCheck": "Fair but weakly discriminating. Despite the test name, the assertion only counts markers; it would pass if the one marker were attached to the wrong turn.",
+      "verifies": "For a request with no system or tools and one bare assistant object, `prepareClaudeRequest` returns exactly one marker in total; the assertion does not verify its location."
+    }
+  ],
+  "unfairTestCount": 1,
+  "verdict": "FAIL"
+}
