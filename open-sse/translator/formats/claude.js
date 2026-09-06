@@ -172,8 +172,9 @@ function hasForeignServerToolUseId(block) {
 // Newer Cowork/Claude Code clients emit beta-only shapes that OAuth endpoints reject:
 // 1. thinking.type "adaptive" → unsupported on Haiku
 // 2. output_config.effort → unsupported on Haiku
-// 3. role "system" messages (mid-conversation-system beta) → only top-level system is allowed
-// 4. server_tool_use blocks carrying a foreign (non-srvtoolu_) id → rejected outright
+// 3. bare content-block objects (content: {block} instead of [{block}]) → wrapped first
+// 4. role "system" messages (mid-conversation-system beta) → only top-level system is allowed
+// 5. server_tool_use blocks carrying a foreign (non-srvtoolu_) id → rejected outright
 export function normalizeClaudePassthrough(body, model = "") {
   if (!body || typeof body !== "object") return body;
 
@@ -188,7 +189,15 @@ export function normalizeClaudePassthrough(body, model = "") {
     if (Object.keys(body.output_config).length === 0) delete body.output_config;
   }
 
-  // 2. Fold mid-conversation system messages into the neighbouring turn.
+  // 3. Wrap bare content-block objects as one-element arrays before folding.
+  // Some clients send content: {block} instead of content: [{block}]; the
+  // mid-conversation-system fold below assumes the array shape, so it must
+  // run first — a bare-object neighbor would otherwise be zeroed to [].
+  if (Array.isArray(body.messages)) {
+    for (const msg of body.messages) normalizeMessageContent(msg);
+  }
+
+  // 4. Fold mid-conversation system messages into the neighbouring turn.
   // Hoisting them into body.system would insert volatile content (token counters,
   // reminders) ahead of the whole conversation and invalidate the prefix cache on
   // every request. Folding in place keeps the cached prefix stable.
@@ -221,14 +230,9 @@ export function normalizeClaudePassthrough(body, model = "") {
     }
     body.messages = messages;
   }
-  // 2.5. Wrap bare content-block objects as one-element arrays. Some clients
-  // send content: {block} instead of content: [{block}]; every later stage
-  // (marker strip, cache anchor, wire serialization) assumes the array shape.
-  if (Array.isArray(body.messages)) {
-    for (const msg of body.messages) normalizeMessageContent(msg);
-  }
 
-  // 3. Drop thinking blocks whose signature is not Claude's (combo mixes models,
+  // 5. Drop thinking blocks whose signature is not Claude's (combo mixes models,
+  // so foreign signatures leak into history and Anthropic rejects them).
   const thinkingEnabled = body.thinking?.type === "enabled";
   const droppedServerToolUseIds = new Set();
   if (Array.isArray(body.messages)) {
@@ -274,7 +278,7 @@ export function normalizeClaudePassthrough(body, model = "") {
     }
   }
 
-  // 5. Drop empty text blocks and any message left with no content at all.
+  // 6. Drop empty text blocks and any message left with no content at all.
   // Anthropic rejects `messages.N.content` blocks with empty text (400
   // "text content blocks must be non-empty"); a message whose blocks were all
   // stripped above must be dropped, not padded with an empty placeholder.

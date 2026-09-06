@@ -54,10 +54,10 @@ index 00000000..a07c52e1
 +exit "$STATUS"
 diff --git a/tests/unit/9router-5375c2.test.js b/tests/unit/9router-5375c2.test.js
 new file mode 100644
-index 00000000..1477b005
+index 00000000..0826a67f
 --- /dev/null
 +++ b/tests/unit/9router-5375c2.test.js
-@@ -0,0 +1,134 @@
+@@ -0,0 +1,149 @@
 +// Scenario: a proxy must not send more cache_control blocks than the upstream
 +// accepts, and must not lose conversation turns that use single-object content.
 +import { describe, it, expect } from "vitest";
@@ -190,5 +190,20 @@ index 00000000..1477b005
 +    expect(out.messages.some(m => JSON.stringify(m.content).includes("u1"))).toBe(true); // base: dropped
 +    const img = out.messages.find(m => m.role === "assistant");
 +    expect(JSON.stringify(img.content)).toContain("image_url"); // base: dropped
++  });
++
++  it("keeps a bare-object user turn folded with a mid-conversation system message", () => {
++    const body = {
++      messages: [
++        { role: "user", content: text("u1") },
++        { role: "system", content: [text("reminder")] },
++        { role: "user", content: [text("q")] },
++      ],
++    };
++    normalizeClaudePassthrough(body);
++    const first = body.messages[0];
++    expect(Array.isArray(first.content)).toBe(true);
++    expect(JSON.stringify(first.content).includes("u1")).toBe(true); // pre-hoist: fold zeroes bare-object content
++    expect(JSON.stringify(first.content).includes("reminder")).toBe(true);
 +  });
 +});
