@@ -47,11 +47,14 @@ export function hasValidContent(msg) {
   return false;
 }
 // Content may arrive as a single content block object (spec allows string | array;
-// some clients send the bare object). Treat it as a one-block array so marker
-// counting, stripping, and the wire format all see the same shape.
+// some clients send the bare object). Wrap it as a one-block array and strip any
+// client-placed cache_control: a bare-object marker must never survive
+// normalization, on any path, guard or no guard.
 function normalizeMessageContent(msg) {
-  if (msg?.content && typeof msg.content === "object" && !Array.isArray(msg.content)) {
-    msg.content = [msg.content];
+  const c = msg?.content;
+  if (c && typeof c === "object" && !Array.isArray(c)) {
+    delete c.cache_control;
+    msg.content = [c];
   }
   return msg;
 }
@@ -218,9 +221,14 @@ export function normalizeClaudePassthrough(body, model = "") {
     }
     body.messages = messages;
   }
+  // 2.5. Wrap bare content-block objects as one-element arrays. Some clients
+  // send content: {block} instead of content: [{block}]; every later stage
+  // (marker strip, cache anchor, wire serialization) assumes the array shape.
+  if (Array.isArray(body.messages)) {
+    for (const msg of body.messages) normalizeMessageContent(msg);
+  }
 
   // 3. Drop thinking blocks whose signature is not Claude's (combo mixes models,
-  // so foreign signatures leak into history and Anthropic rejects them).
   const thinkingEnabled = body.thinking?.type === "enabled";
   const droppedServerToolUseIds = new Set();
   if (Array.isArray(body.messages)) {
@@ -304,9 +312,13 @@ function markLastCacheableBlock(msg) {
 // (normalize, tool dedupe, token savers) — otherwise the anchor drifts off the tail.
 export function anchorClaudeCache(body) {
   if (!body || typeof body !== "object") return body;
-  // The client may already carry up to 4 markers (the upstream per-request cap).
-  // Re-anchoring past a spent budget can only exceed it; every remaining client
-  // marker is itself a valid breakpoint — skip re-anchoring.
+  if (Array.isArray(body.messages)) {
+    for (const msg of body.messages) normalizeMessageContent(msg);
+  }
+  // Budget guard AFTER normalization: bare-object markers are gone, so the
+  // count reflects real array-block breakpoints only. Re-anchoring past a
+  // spent budget can only exceed it; every remaining client marker is itself
+  // a valid breakpoint — skip re-anchoring.
   if (countCacheControlBlocks(body) >= 4) return body;
 
   if (Array.isArray(body.system)) {
@@ -327,7 +339,6 @@ export function anchorClaudeCache(body) {
   }
 
   if (Array.isArray(body.messages)) {
-    for (const msg of body.messages) normalizeMessageContent(msg);
     let anchored = null;
     for (let i = body.messages.length - 1; i >= 0; i--) {
       const msg = body.messages[i];
