@@ -154,6 +154,11 @@ function convertClaudeMessage(msg) {
     const text = systemReminderText(msg.content);
     return text ? { role: ROLE.USER, content: text } : null;
   }
+  // Some clients send content as a single block object; normalize to the
+  // one-element array the block loop below expects.
+  if (msg.content && typeof msg.content === "object" && !Array.isArray(msg.content)) {
+    msg.content = [msg.content];
+  }
 
   const role = msg.role === ROLE.USER || msg.role === ROLE.TOOL ? ROLE.USER : ROLE.ASSISTANT;
   
