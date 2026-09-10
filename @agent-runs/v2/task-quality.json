@@ -1,0 +1,71 @@
+{
+  "completed": true,
+  "evaluation": {
+    "criteria": [
+      {
+        "criterion_id": "01",
+        "criterion_name": "Task is Authentic Engineering Work",
+        "justification": "This is a concrete production request-routing defect: <provider> rejects requests exceeding its cache-breakpoint limit, while a content-shape mismatch silently drops conversation history. The requested behavior maps directly to real proxy responsibilities—normalization, preservation of client context, and upstream protocol compliance—and the existing Claude formatter and Claude-to-<provider> translator are the natural ownership points.",
+        "suggestions": "",
+        "verdict": "PASS"
+      },
+      {
+        "criterion_id": "02",
+        "criterion_name": "Has Reasonable Formatting and Presentation",
+        "justification": "The title succinctly identifies both defects, and the description separates their required behaviors, including the combined edge case. The terminology (Claude endpoint, cache_control marker, system block, content block) is consistent with the repository's existing Claude request structures and is readily understandable from nearby code and tests.",
+        "suggestions": "",
+        "verdict": "PASS"
+      },
+      {
+        "criterion_id": "03",
+        "criterion_name": "Clearly Describes What to Build/Fix",
+        "justification": "The expected outcomes are specific: cap outbound Claude cache_control markers at four; continue placing router anchors while budget remains; normalize bare content-block objects to one-element arrays; strip a bare object's client marker; and preserve array content ordering. It also explicitly identifies the three relevant flows, which correspond to prepareClaudeRequest, normalizeClaudePassthrough/anchorClaudeCache, and claudeToOpenAIRequest in the repository.",
+        "suggestions": "",
+        "verdict": "PASS"
+      },
+      {
+        "criterion_id": "04",
+        "criterion_name": "The Challenge is Fair",
+        "justification": "All hidden assertions follow from the stated behavior or existing local conventions. The repository already centralizes Claude cache anchoring in anchorClaudeCache, filters content through hasValidContent and prepareClaudeRequest, invokes passthrough normalization from chatCore, and converts Claude message arrays in claude-to-<provider>.js; therefore a competent engineer can locate the affected paths without guessing a new API. The tests call existing exported functions and check externally meaningful results—marker count, retained turns, normalized shape, ordering, and converted image content—rather than requiring arbitrary helper names or a particular internal layout.",
+        "suggestions": "",
+        "verdict": "PASS"
+      },
+      {
+        "criterion_id": "05",
+        "criterion_name": "Self-Contained (Not Repo-Wide Refactor)",
+        "justification": "The change is bounded, but it is too narrowly self-contained for the stated Olympus bar. The reference implementation changes only two closely related translator files: a small normalization/counting addition and call-site insertions in open-sse/translator/formats/claude.js, plus one normalization guard in open-sse/translator/request/claude-to-<provider>.js. No callers, dispatch behavior, shared schema, transport integration, or broader consumer contracts require coordinated updates.",
+        "suggestions": "Broaden the work into a substantive request-lifecycle change—for example, establish a shared cache-budget policy applied across all Claude-producing paths and post-processing stages, update the relevant dispatch/translation consumers, and cover it with integration-level request construction tests in addition to unit cases.",
+        "verdict": "FAIL"
+      },
+      {
+        "criterion_id": "06",
+        "criterion_name": "Not Trivial or Too Easy",
+        "justification": "Although the defects are legitimate, the implementation is a modest localized bug fix. The supplied solution consists primarily of recognizing a non-array object, wrapping it, deleting cache_control, counting existing markers, and early-returning when the count reaches four; the remaining changes are a handful of calls to those helpers. The seven focused unit scenarios require attention to mutation order, but do not demand sustained design work or substantial engineering judgment at Olympus scale.",
+        "suggestions": "Add requirements that force design trade-offs beyond local guards, such as a reusable non-mutating normalization contract across formats, explicit behavior for cache-budget reallocation after downstream request transforms, and end-to-end validation that the final dispatched payload remains compliant.",
+        "verdict": "FAIL"
+      },
+      {
+        "criterion_id": "07",
+        "criterion_name": "Success is Objectively Verifiable",
+        "justification": "Correctness is measurable without subjective judgment: outgoing Claude-format requests have at most four markers, router anchors appear when capacity remains, bare object turns become one-element arrays with their client marker removed, existing arrays retain order, and the Claude-to-<provider> conversion retains text and image turns. The hidden tests directly verify these concrete invariants.",
+        "suggestions": "",
+        "verdict": "PASS"
+      },
+      {
+        "criterion_id": "08",
+        "criterion_name": "Long-Horizon and System-Level",
+        "justification": "The task crosses two translation directions and a passthrough helper, so some repository exploration is useful, but it remains a short, local edit within the translation layer. The test patch only imports and exercises four existing formatter/converter functions directly; it does not require changes to chatCore's dispatch path, executors, schemas, persistence, configuration, or consumer interfaces. Consequently it does not meet the long-horizon, system-level threshold expected of an Olympus submission.",
+        "suggestions": "Turn this into a multi-layer request-processing effort: define and enforce cache-control accounting at the final outbound serialization boundary, coordinate normalization across all ingress translators and passthrough flow, ensure later compression/deduplication stages cannot violate the policy, and add end-to-end coverage through the handler/executor path.",
+        "verdict": "FAIL"
+      }
+    ],
+    "fail_count": 3,
+    "pass_count": 5,
+    "summary": "Failures: Criterion 05 (Self-Contained) is too localized to two adjacent translator modules for Olympus scope; Criterion 06 (Not Trivial) is a small normalization-and-budget-guard fix; Criterion 08 (Long-Horizon and System-Level) does not require coordinated changes beyond the translator helpers. Uncertains: none. Feedback: the ticket is well-written, concrete, objectively testable, and fair to solve from repository conventions, but it is appropriate as a focused regression fix rather than an Olympus-tier long-horizon engineering challenge. Expand it into a shared, final-payload cache-budget and normalization policy spanning dispatch, translation, downstream transforms, and integration testing to meet that bar.",
+    "uncertain_count": 0,
+    "verdict": "FAIL"
+  },
+  "executionTimeSeconds": 130.588256,
+  "summary": "Failures: Criterion 05 (Self-Contained) is too localized to two adjacent translator modules for Olympus scope; Criterion 06 (Not Trivial) is a small normalization-and-budget-guard fix; Criterion 08 (Long-Horizon and System-Level) does not require coordinated changes beyond the translator helpers. Uncertains: none. Feedback: the ticket is well-written, concrete, objectively testable, and fair to solve from repository conventions, but it is appropriate as a focused regression fix rather than an Olympus-tier long-horizon engineering challenge. Expand it into a shared, final-payload cache-budget and normalization policy spanning dispatch, translation, downstream transforms, and integration testing to meet that bar.",
+  "verdict": "FAIL"
+}

@@ -1,0 +1,262 @@
+{
+  "completed": true,
+  "coverageSuggestions": [
+    {
+      "area": "Exact under-budget anchor placement",
+      "gapKind": "untested",
+      "requirement": "When marker budget remains, add router breakpoints at each of the three stated anchor locations.",
+      "sourceIfAdded": "Prompt-stated",
+      "suggestion": "Add one assertion-rich case with remaining budget that inspects the exact last system block, last non-deferred/cacheable tool, and last assistant block, rather than only counting markers. This would reject implementations that put the right number of markers on the wrong blocks."
+    },
+    {
+      "area": "Single-object block-type matrix across all three flows",
+      "gapKind": "single_point",
+      "requirement": "Keep and normalize any single content-block object wherever messages are read or reshaped.",
+      "sourceIfAdded": "Prompt-stated",
+      "suggestion": "Use a small table of text, image, tool-use, and tool-result single-block turns across Claude preparation, native passthrough, and Claude-to-<provider> translation. Assert retention and the path-appropriate observable representation, including no client cache marker. This prevents a text-only normalization special case."
+    },
+    {
+      "area": "Marker stripping on the Claude-to-<provider> leg",
+      "gapKind": "untested",
+      "requirement": "Remove any client-placed cache-control marker from a normalized single-object turn.",
+      "sourceIfAdded": "Prompt-stated",
+      "suggestion": "Add a marked single-object Claude message to the Claude-to-<provider> test and assert that the translated message remains present while no `cache_control` field survives."
+    },
+    {
+      "area": "Array preservation in each translation path",
+      "gapKind": "single_point",
+      "requirement": "Preserve structure and ordering for messages already using array content.",
+      "sourceIfAdded": "Prompt-stated",
+      "suggestion": "Add distinguishable multi-block arrays to the translated-to-Claude and Claude-to-<provider> paths and assert that their order is preserved through the applicable translation. The current exact array check covers only the native combined-defect path."
+    }
+  ],
+  "error": "",
+  "executionTimeSeconds": 159.876213,
+  "message": "All hidden tests are fair.",
+  "overall": "PASS: all hidden assertions are predictable from either the explicit problem description or a concrete existing translation convention. No hidden test requires an unstated error string, private call sequence, environmental condition, ordering between tests, or timing behavior. Several tests are single-fixture regression checks and some count markers without asserting their exact location; those are quality/coverage limitations, not fairness defects.",
+  "requirements": [
+    {
+      "covered": "yes",
+      "coveringTests": [
+        "never emits more than four markers when the client already spent its budget",
+        "keeps a marked single-object turn when the marker budget is spent"
+      ],
+      "requirement": "Every request sent to a Claude endpoint carries at most four cache-control markers.",
+      "sourceQuote": "“a request delivered to a Claude endpoint must never carry more than four cache_control markers.”"
+    },
+    {
+      "covered": "no",
+      "coveringTests": [],
+      "requirement": "When marker budget remains, add a router breakpoint on the last system block.",
+      "sourceQuote": "“When the client has not spent its marker budget, the router still adds its own breakpoints on the last system block”"
+    },
+    {
+      "covered": "no",
+      "coveringTests": [],
+      "requirement": "When marker budget remains, add a router breakpoint on the last cacheable tool.",
+      "sourceQuote": "“the last cacheable tool”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "normalizes a single-object turn in passthrough and anchors it",
+        "re-anchors the last assistant turn even when it uses single-object content"
+      ],
+      "requirement": "When marker budget remains, add a router breakpoint on the last assistant turn.",
+      "sourceQuote": "“and the last assistant turn.”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "keeps a turn whose content is a single object and strips its marker",
+        "drops no conversation turn when content is a single text object",
+        "re-anchors the last assistant turn even when it uses single-object content"
+      ],
+      "requirement": "Keep single-object content turns when translating requests into Claude format.",
+      "sourceQuote": "“requests translated into Claude format”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "normalizes a single-object turn in passthrough and anchors it",
+        "keeps a marked single-object turn when the marker budget is spent",
+        "keeps a bare-object user turn folded with a mid-conversation system message — turn retention"
+      ],
+      "requirement": "Keep single-object content turns in native Claude passthrough requests.",
+      "sourceQuote": "“native Claude passthrough requests”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "keeps single-object turns on the claude-to-<provider> leg — text retention",
+        "keeps single-object turns on the claude-to-<provider> leg — image mapping"
+      ],
+      "requirement": "Keep single-object content turns when translating Claude format into <provider> format.",
+      "sourceQuote": "“requests translated from Claude format into <provider> format.”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "normalizes a single-object turn in passthrough and anchors it",
+        "keeps a turn whose content is a single object and strips its marker",
+        "drops no conversation turn when content is a single text object",
+        "keeps a marked single-object turn when the marker budget is spent",
+        "keeps a bare-object user turn folded with a mid-conversation system message — turn retention"
+      ],
+      "requirement": "Normalize a single content-block object to a one-element array.",
+      "sourceQuote": "“Such a turn is delivered as a one-element array”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "keeps a turn whose content is a single object and strips its marker",
+        "keeps a marked single-object turn when the marker budget is spent"
+      ],
+      "requirement": "Remove any client cache-control marker from a normalized single-object turn.",
+      "sourceQuote": "“with any client-placed cache_control marker removed.”"
+    },
+    {
+      "covered": "partial",
+      "coveringTests": [
+        "keeps a marked single-object turn when the marker budget is spent"
+      ],
+      "requirement": "Preserve the structure and ordering of messages whose content is already an array.",
+      "sourceQuote": "“Messages already using array content keep their structure and ordering.”"
+    },
+    {
+      "covered": "yes",
+      "coveringTests": [
+        "keeps a marked single-object turn when the marker budget is spent"
+      ],
+      "requirement": "In the combined spent-budget case, keep the marked single-object turn.",
+      "sourceQuote": "“A request combining both defects - the marker budget spent and a single-object turn carrying a client marker - keeps the turn”"
+    },
+    {
+      "covered": "yes",
+      "coveringTests": [
+        "keeps a marked single-object turn when the marker budget is spent"
+      ],
+      "requirement": "In the combined spent-budget case, normalize the single-object turn.",
+      "sourceQuote": "“normalizes it”"
+    },
+    {
+      "covered": "yes",
+      "coveringTests": [
+        "keeps a marked single-object turn when the marker budget is spent"
+      ],
+      "requirement": "In the combined spent-budget case, remove the single-object turn’s client marker.",
+      "sourceQuote": "“removes its marker”"
+    },
+    {
+      "covered": "yes",
+      "coveringTests": [
+        "keeps a marked single-object turn when the marker budget is spent"
+      ],
+      "requirement": "In the combined spent-budget case, do not exceed four markers.",
+      "sourceQuote": "“and adds no marker past the four-marker limit.”"
+    }
+  ],
+  "taskSummary": "The task asks for two related Claude request-translation fixes. First, every outbound Claude-format request must stay within <provider>’s four-cache-marker limit; when capacity remains, router-owned breakpoints still belong on the last system block, last cacheable tool, and last assistant turn. Second, message content supplied as one block object must not be discarded in any of the three named flows: translation into Claude, native Claude passthrough, or Claude-to-<provider> translation. It must be normalized to a one-element array and any client cache marker on that block removed, while pre-existing arrays retain their contents and ordering. The interaction case must both preserve/normalize the marked turn and remain within the marker cap. No new error-message or exception semantics are requested.",
+  "tests": [
+    {
+      "concerns": [],
+      "evidence": "The prompt explicitly says, “a request delivered to a Claude endpoint must never carry more than four cache_control markers,” and separately singles out the spent-budget interaction. The assertion accepts exactly that upper bound in the stated spent-budget scenario.",
+      "fairness": "Prompt-stated",
+      "name": "never emits more than four markers when the client already spent its budget",
+      "qualityCheck": "Fair and directly discriminating for the global cap. It is intentionally permissive about which markers survive and therefore does not verify anchoring positions or marker-removal details.",
+      "verifies": "After `anchorClaudeCache` receives a body with four client markers spread across system, tools, and two bare-object message blocks, `countMarkers(out)` is at most 4."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "The prompt says a single-object turn “must be kept” in “native Claude passthrough requests” and “is delivered as a one-element array.” It also says that while the marker budget is unspent the router adds a breakpoint on “the last assistant turn.” With no system or tools in this fixture, those requirements imply one resulting marker.",
+      "fairness": "Prompt-stated",
+      "name": "normalizes a single-object turn in passthrough and anchors it",
+      "qualityCheck": "Fair, but the exact marker count does not establish that the marker is actually on the assistant block rather than a user block. The fixture exercises only a text block.",
+      "verifies": "After native passthrough normalization, the assistant message still exists, its `content` is an array of length 1, and after cache anchoring the whole body contains exactly one marker."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "For “requests translated into Claude format,” the prompt explicitly requires a single-object turn to be kept, delivered as a one-element array, and have “any client-placed cache_control marker removed.” Every accepted property is named by that sentence.",
+      "fairness": "Prompt-stated",
+      "name": "keeps a turn whose content is a single object and strips its marker",
+      "qualityCheck": "Fair and checks retention, one-element normalization, and marker stripping together. It uses only one marked text-block example.",
+      "verifies": "`prepareClaudeRequest` produces exactly one message whose serialized content contains `u1`; that message has one content element, and that element has no `cache_control` property."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "The prompt says single-object turns “must be kept” in requests translated into Claude format and that such a turn “is delivered as a one-element array.” Thus all three turns must remain and the first bare-object turn must be normalized to an array.",
+      "fairness": "Prompt-stated",
+      "name": "drops no conversation turn when content is a single text object",
+      "qualityCheck": "Fair, though incomplete: it does not independently assert the assistant bare-object turn’s array shape or the values/order of all three returned turns.",
+      "verifies": "For two bare text-object turns followed by one array-content turn, `prepareClaudeRequest` returns exactly three messages, and the first returned message has array content."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "The prompt says an unspent marker budget still gets a router breakpoint on “the last assistant turn,” and separately requires that the single-object assistant turn be kept. With no other anchor surfaces in this setup, one marker is the stated result.",
+      "fairness": "Prompt-stated",
+      "name": "re-anchors the last assistant turn even when it uses single-object content",
+      "qualityCheck": "Fair as a marker-addition regression check, but shallow: it counts one marker without asserting that the marker is attached to the assistant turn, so anchoring the final user turn would also pass.",
+      "verifies": "For a request with no system/tools/client markers and a bare-object assistant between user turns, the prepared body contains exactly one cache marker."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "The prompt explicitly states that a request combining “the marker budget spent and a single-object turn carrying a client marker” keeps the turn, normalizes it, removes its marker, and adds no marker past four. It also explicitly says, “Messages already using array content keep their structure and ordering,” which supports the exact two-block array comparison.",
+      "fairness": "Prompt-stated",
+      "name": "keeps a marked single-object turn when the marker budget is spent",
+      "qualityCheck": "Fair and the strongest interaction test in the suite. It jointly checks retention, normalization, stripping, array preservation, ordering, and the cap, although it remains one concrete distribution of markers and message blocks.",
+      "verifies": "In the combined-defect fixture: exactly one message still contains `u1`; its content is an array of length 1; its sole block has no `cache_control`; the existing array message containing `c1` remains exactly `[text(\"c1\"), text(\"c2\")]`; and the resulting body has at most four markers."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "The prompt explicitly includes “requests translated from Claude format into <provider> format” among the paths where a single-object turn “must be kept.” The assertion checks that exact retention property without pinning a particular <provider> text-content shape.",
+      "fairness": "Prompt-stated",
+      "name": "keeps single-object turns on the claude-to-<provider> leg — text retention",
+      "qualityCheck": "Fair, but it is a loose presence check and does not verify the returned role, number of copies, array normalization, or cache-marker stripping.",
+      "verifies": "The Claude-to-<provider> result contains at least one message whose serialized content includes the text `u1` from a bare-object user turn."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "The prompt requires preservation on the Claude-to-<provider> leg. The existing array-content conversion maps a Claude image block with base64 source to an <provider> part whose `type` is `<provider>_BLOCK.IMAGE_URL` at `open-sse/translator/request/claude-to-<provider>.js:165-177`; `<provider>_BLOCK.IMAGE_URL` is exactly `\"image_url\"` at `open-sse/translator/schema/blocks.js:6`. Normalizing the newly supported object to the prompt-required one-element array makes that visible conversion convention applicable to this setup.",
+      "fairness": "Repo-discoverable",
+      "name": "keeps single-object turns on the claude-to-<provider> leg — image mapping",
+      "qualityCheck": "Fair: the output token is not arbitrary because the existing converter explicitly establishes it. The substring assertion is less structural than checking the block itself and covers only one base64 image example.",
+      "verifies": "The assistant message produced from a bare Claude image block has serialized content containing the exact <provider> block type string `image_url`."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "The prompt requires native Claude passthrough to keep a single-object turn “wherever messages are read or re-shaped” and deliver it as a one-element array. This setup specifically exercises reshaping during system-message folding.",
+      "fairness": "Prompt-stated",
+      "name": "keeps a bare-object user turn folded with a mid-conversation system message — turn retention",
+      "qualityCheck": "Fair and useful for a secondary reshaping path, but it checks one text-only predecessor case.",
+      "verifies": "After passthrough normalization, the first message has array content and that array’s serialization still includes `u1` from the original bare-object user turn."
+    },
+    {
+      "concerns": [
+        "overfit_single_point"
+      ],
+      "evidence": "The existing passthrough normalizer explicitly folds mid-conversation system messages “into the neighbouring turn” at `open-sse/translator/formats/claude.js:155-158`; when the previous message is a user, it appends a text block to that message’s content at `open-sse/translator/formats/claude.js:174-188`. That code produces the exact neighboring-user placement accepted by the assertion.",
+      "fairness": "Repo-discoverable",
+      "name": "keeps a bare-object user turn folded with a mid-conversation system message — reminder placement",
+      "qualityCheck": "Fair and grounded in the pre-existing folding behavior. It is ancillary to the prompt’s defect and checks only the previous-user branch, not the branch with no preceding user.",
+      "verifies": "After normalization, the first message’s array content contains the text `reminder` from the following system message."
+    }
+  ],
+  "unfairTestCount": 0,
+  "verdict": "PASS"
+}
