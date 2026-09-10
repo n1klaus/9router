@@ -8,13 +8,24 @@ const knownFails = new Set(
     .split("\n").map(s => s.trim()).filter(Boolean)
 );
 
+// Normalize a vitest JSON file name to a baseline key: keep the /app/ split
+// (container layout) when present, otherwise fall back to the path relative
+// to the repo root (tests/...) so local runs match known-fails.txt.
+function baselineKey(fname) {
+  const app = fname.split("/app/")[1];
+  if (app) return app;
+  const segs = fname.split("/");
+  const i = segs.indexOf("tests");
+  return i >= 0 ? segs.slice(i).join("/") : fname;
+}
+
 const resultsPath = process.argv[2];
 if (!resultsPath) { console.error("Missing results.json path"); process.exit(2); }
 
 const r = JSON.parse(readFileSync(resultsPath, "utf8"));
 const nowFails = r.testResults.flatMap(f =>
   f.assertionResults.filter(a => a.status === "failed")
-    .map(a => f.name.split("/app/")[1] + " :: " + a.fullName)
+    .map(a => baselineKey(f.name) + " :: " + a.fullName)
 );
 
 // Regression = fail bây giờ NHƯNG không có trong baseline known-fails
