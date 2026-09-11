@@ -160,6 +160,41 @@ describe("cache marker budget and single-block content", () => {
     expect(out.system[0].cache_control).toBeUndefined();  // earliest marker pruned
   });
 
+  // A spent budget must not cost the head anchors their 1h TTL: system/tools are
+  // the whole point of re-anchoring, and a 5m fallback silently halves the cache
+  // lifetime on exactly the requests that already cached aggressively.
+  it("keeps the 1h head anchors when the client spent the whole budget", () => {
+    const out = anchorClaudeCache({
+      system: [text("s1"), text("s2", { cache_control: CC })],
+      tools: [tool("t1", { cache_control: CC }), tool("t2")],
+      messages: [
+        { role: "user", content: [text("u1", { cache_control: CC })] },
+        { role: "assistant", content: [text("a1", { cache_control: CC })] },
+        { role: "user", content: [text("q")] },
+      ],
+    });
+    expect(countMarkers(out)).toBeLessThanOrEqual(4);
+    expect(out.system.at(-1).cache_control?.ttl).toBe("1h");  // pre-fix: fell back to 5m
+    expect(out.tools.at(-1).cache_control?.ttl).toBe("1h");   // pre-fix: fell back to 5m
+  });
+
+  it("keeps the 1h head anchors on an over-budget body", () => {
+    const out = anchorClaudeCache({
+      system: [text("s1", { cache_control: CC })],
+      tools: [tool("t1", { cache_control: CC }), tool("t2")],
+      messages: [
+        { role: "user", content: [text("u1", { cache_control: CC })] },
+        { role: "assistant", content: [text("a1", { cache_control: CC })] },
+        { role: "user", content: [text("u2", { cache_control: CC })] },
+        { role: "assistant", content: [text("a2", { cache_control: CC })] },
+        { role: "user", content: [text("q")] },
+      ],
+    });
+    expect(countMarkers(out)).toBe(4);
+    expect(out.system.at(-1).cache_control?.ttl).toBe("1h");
+    expect(out.tools.at(-1).cache_control?.ttl).toBe("1h");
+  });
+
   it("strips a marker from a deferred tool even when the budget is spent", () => {
     const out = anchorClaudeCache({
       system: [text("s1", { cache_control: CC })],

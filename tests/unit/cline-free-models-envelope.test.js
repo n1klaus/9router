@@ -96,6 +96,15 @@ describe("cline free-models {success,data} envelope", () => {
     const result = await pingModelByKind("openai/gpt-4o", "llm", "http://127.0.0.1:20127");
     expect(result.ok).toBe(true);
   });
+
+  it("ping: does not unwrap for a provider that did not opt in", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ success: true, data: { choices: [{ message: { content: "OK" } }] } })
+    );
+    const result = await pingModelByKind("openai/gpt-4o", "llm", "http://127.0.0.1:20127");
+    expect(result.ok).toBe(false);
+    expect(result.error).toMatch(/no completion choices/i);
+  });
 });
 
 describe("cline free-models envelope in nonStreamingHandler", () => {
@@ -107,10 +116,10 @@ describe("cline free-models envelope in nonStreamingHandler", () => {
     return { logProviderResponse() {}, logConvertedResponse() {} };
   }
 
-  function callHandler(providerResponse) {
+  function callHandler(providerResponse, provider = "cline") {
     return handleNonStreamingResponse({
       providerResponse,
-      provider: "cline",
+      provider,
       model: "z-ai/glm-5.3-flash",
       sourceFormat: "openai",
       targetFormat: "openai",
@@ -177,6 +186,24 @@ describe("cline free-models envelope in nonStreamingHandler", () => {
       completion_tokens: 1,
     });
     expect(body.usage.prompt_tokens).toBe(2003);
+  });
+
+  // The unwrap is opt-in via transport.quirks.clineEnvelope so it can never
+  // rewrite another provider's body — including one that happens to return
+  // {"success":true,"data":...} for its own reasons.
+  it("leaves an enveloped body untouched for a provider that did not opt in", async () => {
+    const providerResponse = new Response(
+      JSON.stringify({
+        success: true,
+        data: { choices: [{ message: { content: "Hi" } }] },
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+    const result = await callHandler(providerResponse, "openai");
+    const body = await result.response.json();
+    expect(body.success).toBe(true);
+    expect(body.data.choices[0].message.content).toBe("Hi");
+    expect(body.choices).toBeUndefined();
   });
 });
 

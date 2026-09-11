@@ -74,10 +74,19 @@ function countCacheControlBlocks(body) {
   }
   return n;
 }
-// Strip every cache_control except the last 4 markers in document order
-// (system, then tools, then messages). Tail-most breakpoints keep paying off
-// on later turns; earlier ones are superseded once the prefix grows past them.
-function pruneCacheControlBlocks(body) {
+// Trim every marker past the 4-marker budget. The head anchors (last system
+// block, last cacheable tool) are held; the remaining slots go to the tail-most
+// of the other markers in document order. A plain "keep the last 4 in document
+// order" rule would drop the head anchors first — they lead document order, yet
+// they are exactly what re-anchoring exists to pin.
+function capCacheControlBlocks(body) {
+  const isHead = (b) => {
+    const sys = Array.isArray(body?.system) ? body.system : [];
+    if (sys.length && sys[sys.length - 1] === b) return true;
+    const tools = Array.isArray(body?.tools) ? body.tools : [];
+    const lastTool = lastCacheableToolIndex(tools);
+    return lastTool >= 0 && tools[lastTool] === b;
+  };
   const marked = [];
   if (Array.isArray(body?.system)) for (const b of body.system) if (b?.cache_control) marked.push(b);
   if (Array.isArray(body?.tools)) for (const t of body.tools) if (t?.cache_control) marked.push(t);
@@ -86,7 +95,10 @@ function pruneCacheControlBlocks(body) {
       if (Array.isArray(m?.content)) for (const b of m.content) if (b?.cache_control) marked.push(b);
     }
   }
-  for (const b of marked.slice(0, -4)) delete b.cache_control;
+  const head = marked.filter(isHead);
+  const rest = marked.filter(b => !isHead(b));
+  const keep = Math.max(0, 4 - head.length);
+  for (const b of rest.slice(0, Math.max(0, rest.length - keep))) delete b.cache_control;
 }
 
 // Fix tool_use/tool_result ordering for Claude API
@@ -343,17 +355,9 @@ export function anchorClaudeCache(body) {
     }
   }
 
-  // Over-budget prune: a client body already carrying MORE than 4 markers is a
-  // guaranteed 400; forwarding it untouched burns the account pool. Keep the
-  // LAST 4 breakpoints and strip the earlier ones.
-  if (countCacheControlBlocks(body) > 4) pruneCacheControlBlocks(body);
-
-  // Budget guard AFTER normalization and prune: at exactly 4 the client has
-  // spent the whole budget and every remaining marker is itself a valid
-  // breakpoint — re-anchoring past a spent budget can only exceed it, so
-  // skip re-anchoring.
-  if (countCacheControlBlocks(body) >= 4) return body;
-
+  // Head anchors first, before any budget guard: the 1h TTL on system/tools is
+  // the point of re-anchoring, and skipping it because the client spent its
+  // budget would silently downgrade a cache hit to the 5m default.
   if (Array.isArray(body.system)) {
     const last = body.system.length - 1;
     body.system.forEach((block, i) => {
@@ -369,6 +373,15 @@ export function anchorClaudeCache(body) {
       if (i === last) tool.cache_control = { ...CACHE_CONTROL_1H };
       else delete tool.cache_control;
     });
+  }
+
+  // Budget guard AFTER the head anchors: with the last system block and last
+  // tool pinned, at most 2 slots remain. At >= 4 markers the client has spent
+  // the rest of the budget and every remaining marker is itself a valid
+  // breakpoint — re-anchoring the tail could only exceed 4, so trim instead.
+  if (countCacheControlBlocks(body) >= 4) {
+    capCacheControlBlocks(body);
+    return body;
   }
 
   if (Array.isArray(body.messages)) {
@@ -544,8 +557,21 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
     // Strip built-in tools (e.g. web_search_20250305) and normalize to Anthropic-native shape
     // (drop `type` field, fold `function.{name,description,parameters}`) for non-Anthropic providers
     if (provider !== "claude") {
+      // Provider-specific whitelist of Anthropic tool `type` values that the
+      // upstream actually accepts. When the provider declares it
+      // (e.g. DeepSeek — only web_search_*), keep only listed types; otherwise
+      // keep the prior behaviour of dropping every non-function tool, which is
+      // correct for OpenAI-compatible targets reached through this Claude-format
+      // pass (their tools get normalized below to function-style).
+      const supportedTypes = PROVIDERS[provider]?.quirks?.claudeSupportedToolTypes;
+      const hasWhitelist = Array.isArray(supportedTypes);
       body.tools = body.tools
-        .filter(tool => !tool.type || tool.type === "function")
+        .filter(tool => {
+          const t = tool?.type;
+          if (!t || t === "function") return true;
+          if (hasWhitelist) return supportedTypes.includes(t);
+          return false;
+        })
         .map(tool => {
           if (tool.function) {
             return {
@@ -554,6 +580,13 @@ export function prepareClaudeRequest(body, provider = null, apiKey = null, conne
               input_schema: tool.function.parameters,
             };
           }
+          // When the provider declared a supportedToolTypes whitelist, keep
+          // the surviving tools' `type` field intact — the upstream
+          // Anthropic-compatible endpoint (e.g. DeepSeek) requires it to
+          // route built-ins like web_search_* correctly. Without a
+          // whitelist, preserve prior behaviour and strip `type` so the
+          // tool is normalized to plain Anthropic shape.
+          if (hasWhitelist) return tool;
           const { type, ...rest } = tool;
           return rest;
         });
