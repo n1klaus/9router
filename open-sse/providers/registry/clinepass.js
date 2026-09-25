@@ -10,7 +10,7 @@ export default {
     textIcon: "CP",
     website: "https://cline.bot",
     notice: {
-      signupUrl: "https://app.cline.bot",
+      signupUrl: "https://app.cline.bot/settings/api-keys",
     },
   },
   category: "oauth",
