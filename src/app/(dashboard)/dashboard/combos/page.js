@@ -308,18 +308,20 @@ export default function CombosPage() {
     });
   };
 
-  // Merge a per-combo strategy patch into settings.comboStrategies. Passing an empty
-  // patch (strategy back to default "fallback") drops the entry entirely.
+  // Merge a per-combo strategy patch into settings.comboStrategies. null values
+  // clear a key; a default "fallback" strategy is dropped; an entry with no
+  // remaining keys is removed.
   const handleSetComboStrategy = async (comboName, patch) => {
     try {
       const updated = { ...comboStrategies };
-      const next = { ...(updated[comboName] || {}), ...patch };
-      // Prune to keep settings clean: default fallback with no extras = no entry.
-      if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") {
-        delete updated[comboName];
-      } else {
-        updated[comboName] = next;
+      const next = { ...(updated[comboName] || {}) };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null || value === undefined) delete next[key];
+        else next[key] = value;
       }
+      if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") delete next.fallbackStrategy;
+      if (Object.keys(next).length === 0) delete updated[comboName];
+      else updated[comboName] = next;
 
       await persistComboStrategies(updated);
     } catch (error) {
@@ -333,14 +335,11 @@ export default function CombosPage() {
     try {
       const updated = { ...comboStrategies };
       for (const combo of selectedCombos) {
-        if (!strategy || strategy === "fallback") {
-          delete updated[combo.name];
-        } else {
-          updated[combo.name] = {
-            ...(updated[combo.name] || {}),
-            fallbackStrategy: strategy,
-          };
-        }
+        const next = { ...(updated[combo.name] || {}) };
+        if (strategy && strategy !== "fallback") next.fallbackStrategy = strategy;
+        else delete next.fallbackStrategy;
+        if (Object.keys(next).length === 0) delete updated[combo.name];
+        else updated[combo.name] = next;
       }
       await persistComboStrategies(updated);
     } catch (error) {
@@ -565,6 +564,19 @@ const fmtK = (n) => {
 
 function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
+  const statusesDefault = strategy.unhealthyStatuses == null
+    ? ""
+    : (strategy.unhealthyStatuses.length === 0 ? "all" : strategy.unhealthyStatuses.join(", "));
+  // Uncontrolled input keyed by the persisted override: remounts with fresh
+  // defaults whenever the saved value changes, no sync effect needed.
+  const statusesKey = JSON.stringify(strategy.unhealthyStatuses ?? null);
+  const commitStatuses = (text) => {
+    const t = (text || "").trim().toLowerCase();
+    if (t === "") return onSetStrategy({ unhealthyStatuses: null });
+    if (t === "all") return onSetStrategy({ unhealthyStatuses: [] });
+    const list = t.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+    onSetStrategy({ unhealthyStatuses: list.length ? list : null });
+  };
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
@@ -685,6 +697,50 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             </button>
           </div>
         </div>
+      </div>
+      {/* Unhealthy skip overrides — empty = inherit global */}
+      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-border/50 pt-2 text-[11px] text-text-muted">
+        <span className="font-medium">Unhealthy skip</span>
+        <label className="flex items-center gap-1">
+          threshold
+          <Input
+            type="number"
+            min="1"
+            max="20"
+            placeholder="inherit"
+            value={strategy.unhealthyThreshold ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              onSetStrategy({ unhealthyThreshold: raw === "" ? null : Math.min(20, Math.max(1, parseInt(raw, 10) || 1)) });
+            }}
+            className="w-16 text-center"
+          />
+        </label>
+        <label className="flex items-center gap-1">
+          reset min
+          <Input
+            type="number"
+            min="1"
+            max="1440"
+            placeholder="inherit"
+            value={strategy.unhealthyResetMs != null ? Math.round(strategy.unhealthyResetMs / 60000) : ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              onSetStrategy({ unhealthyResetMs: raw === "" ? null : Math.min(1440, Math.max(1, parseInt(raw, 10) || 1)) * 60000 });
+            }}
+            className="w-16 text-center"
+          />
+        </label>
+        <label className="flex items-center gap-1">
+          statuses
+          <Input
+            key={statusesKey}
+            placeholder="inherit"
+            defaultValue={statusesDefault}
+            onBlur={(e) => commitStatuses(e.target.value)}
+            className="w-28 text-center"
+          />
+        </label>
       </div>
 
       {/* Judge model picker (single-select; combo members make natural judges too) */}
