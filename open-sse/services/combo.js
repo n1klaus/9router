@@ -3,6 +3,7 @@
  */
 
 import { checkFallbackError, formatRetryAfter } from "./accountFallback.js";
+import { getSkippedModels, recordComboFailure, recordComboSuccess } from "./comboHealth.js";
 import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
@@ -275,9 +276,10 @@ export function getComboModelsFromData(modelStr, combosData) {
  * @param {string} [options.comboName] - Name of the combo (for round-robin tracking)
  * @param {string} [options.comboStrategy] - Strategy: "fallback" or "round-robin"
  * @param {number|string} [options.comboStickyLimit=1] - Requests per combo model before switching
+ * @param {Object|null} [options.healthCfg=null] - Unhealthy skip config { threshold, resetMs, statuses }; omit/null disables the feature
  * @returns {Promise<Response>}
  */
-export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true }) {
+export async function handleComboChat({ body, models, handleSingleModel, log, comboName, comboStrategy, comboStickyLimit = 1, autoSwitch = true, healthCfg = null }) {
   // Apply rotation strategy if enabled
   let rotatedModels = getRotatedModels(models, comboName, comboStrategy, comboStickyLimit);
 
@@ -292,20 +294,33 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       rotatedModels = reordered;
     }
   }
+  // Sticky failure memory: skip models that hit the unhealthy threshold recently.
+  const skipped = healthCfg ? getSkippedModels(comboName, rotatedModels, healthCfg) : [];
+  let attemptModels = rotatedModels;
+  if (skipped.length > 0) {
+    const filtered = rotatedModels.filter((m) => !skipped.includes(m));
+    if (filtered.length === 0) {
+      log.warn("COMBO", `All models skipped by health state, trying all anyway: ${skipped.join(", ")}`);
+    } else {
+      log.info("COMBO", `Skipping unhealthy: ${skipped.join(", ")}`);
+      attemptModels = filtered;
+    }
+  }
   
   let lastError = null;
   let earliestRetryAfter = null;
   let lastStatus = null;
 
-  for (let i = 0; i < rotatedModels.length; i++) {
-    const modelStr = rotatedModels[i];
-    log.info("COMBO", `Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
+  for (let i = 0; i < attemptModels.length; i++) {
+    const modelStr = attemptModels[i];
+    log.info("COMBO", `Trying model ${i + 1}/${attemptModels.length}: ${modelStr}`);
 
     try {
       const result = await handleSingleModel(body, modelStr);
       
       // Success (2xx) - return response
       if (result.ok) {
+        if (healthCfg) recordComboSuccess(comboName, modelStr);
         log.info("COMBO", `Model ${modelStr} succeeded`);
         return result;
       }
@@ -338,6 +353,8 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
         log.warn("COMBO", `Model ${modelStr} failed (no fallback)`, { status: result.status });
         return result;
       }
+      // Count toward this combo's unhealthy counter (statuses list filters what counts).
+      if (healthCfg) recordComboFailure(comboName, modelStr, result.status, healthCfg);
 
       // For transient errors (503/502/504), wait for cooldown before falling through
       // so a briefly-overloaded provider gets a chance to recover rather than being
@@ -356,6 +373,7 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       // Catch unexpected exceptions to ensure fallback continues
       lastError = error.message || String(error);
       if (!lastStatus) lastStatus = 500;
+      if (healthCfg) recordComboFailure(comboName, modelStr, 500, healthCfg);
       log.warn("COMBO", `Model ${modelStr} threw error, trying next`, { error: lastError });
     }
   }
