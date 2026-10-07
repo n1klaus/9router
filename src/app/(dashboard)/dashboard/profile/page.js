@@ -6,6 +6,7 @@ import Modal, { ConfirmModal } from "@/shared/components/Modal";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
+import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes } from "@/shared/utils/unhealthyStatuses";
 import { APP_CONFIG } from "@/shared/constants/config";
 import { LOCALE_COOKIE, normalizeLocale } from "@/i18n/config";
 import { LOCALE_FLAGS } from "@/shared/constants/locales";
@@ -360,18 +361,17 @@ export default function ProfilePage() {
     }
   };
 
-  const updateComboUnhealthyStatuses = async (text) => {
-    const trimmed = (text || "").trim();
-    const statuses = trimmed === ""
-      ? []
-      : trimmed.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  const updateComboUnhealthyStatuses = async (list) => {
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comboUnhealthyStatuses: statuses }),
+        body: JSON.stringify({ comboUnhealthyStatuses: list }),
       });
-      if (res.ok) setSettings(prev => ({ ...prev, comboUnhealthyStatuses: statuses }));
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, comboUnhealthyStatuses: list }));
+        setUnhealthyStatusesText(formatStatusCodes(list));
+      }
     } catch (err) {
       console.error("Failed to update combo unhealthy statuses:", err);
     }
@@ -1613,18 +1613,56 @@ export default function ProfilePage() {
                 className="w-20 text-center"
               />
             </div>
-            <div className="flex items-center justify-between gap-4 pt-2 border-t border-border/50">
+            <div className="flex flex-col gap-2 pt-2 border-t border-border/50">
               <div>
                 <p className="font-medium">Counted error codes</p>
-                <p className="text-sm text-text-muted">HTTP statuses that count toward the threshold (comma separated, empty = all errors)</p>
+                <p className="text-sm text-text-muted">HTTP statuses that count toward the threshold (classes, codes, or both; empty = all errors)</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-4">
+                {["4xx", "5xx"].map((marker) => {
+                  const { classes } = splitStatusClasses(settings.comboUnhealthyStatuses);
+                  const on = classes.includes(marker);
+                  return (
+                    <label key={marker} className="flex cursor-pointer items-center gap-2 text-sm text-text-main select-none">
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => {
+                          // Last writer wins: a class toggle raced with typing is
+                          // authoritative; typed text stays as explicit codes only.
+                          const committed = splitStatusClasses(settings.comboUnhealthyStatuses);
+                          const typed = parseStatusesInput(unhealthyStatusesText) ?? [];
+                          const next = toggleStatusClass(settings.comboUnhealthyStatuses, marker, !on);
+                          if (!on) {
+                            setUnhealthyStatusesText(formatStatusCodes(typed));
+                          } else {
+                            setUnhealthyStatusesText(formatStatusCodes([...committed.codes, ...typed]));
+                          }
+                          updateComboUnhealthyStatuses(next);
+                        }}
+                        disabled={loading}
+                        className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      />
+                      all {marker} errors
+                    </label>
+                  );
+                })}
               </div>
               <Input
                 value={unhealthyStatusesText}
                 onChange={(e) => setUnhealthyStatusesText(e.target.value)}
-                onBlur={() => updateComboUnhealthyStatuses(unhealthyStatusesText)}
+                onBlur={() => {
+                  const typed = parseStatusesInput(unhealthyStatusesText);
+                  if (typed === null) {
+                    setUnhealthyStatusesText(formatStatusCodes(settings.comboUnhealthyStatuses));
+                    return;
+                  }
+                  const { classes } = splitStatusClasses(settings.comboUnhealthyStatuses);
+                  updateComboUnhealthyStatuses([...classes, ...typed]);
+                }}
                 placeholder="404, 401, 402, 403"
-                disabled={loading}
-                className="w-44 text-center"
+                disabled={loading || splitStatusClasses(settings.comboUnhealthyStatuses).classes.length > 0}
+                className="w-full text-center"
               />
             </div>
           </div>

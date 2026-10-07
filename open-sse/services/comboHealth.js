@@ -1,3 +1,5 @@
+import { matchesStatusClasses } from "../../src/shared/utils/unhealthyStatuses.js";
+
 /**
  * Combo unhealthy-model skip: sticky in-memory failure memory per combo/model.
  * Skip after N consecutive failures (within a reset window); re-admit lazily
@@ -13,7 +15,7 @@ function normalizeCfg(cfg = {}) {
   return {
     threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 3,
     resetMs: Number.isFinite(resetMs) && resetMs > 0 ? resetMs : 24 * 60 * 60 * 1000,
-    statuses: Array.isArray(cfg.statuses) ? cfg.statuses.map(Number).filter(Number.isFinite) : [],
+    statuses: Array.isArray(cfg.statuses) ? cfg.statuses.map((s) => (s === "4xx" || s === "5xx" ? s : Number(s))).filter((s) => s === "4xx" || s === "5xx" || Number.isFinite(s)) : [],
   };
 }
 
@@ -30,8 +32,7 @@ function comboMap(name, create = false) {
 /** Empty status list = count every fallbackable failure. */
 export function shouldCount(status, cfg = {}) {
   const { statuses } = normalizeCfg(cfg);
-  if (statuses.length === 0) return true;
-  return statuses.includes(Number(status));
+  return matchesStatusClasses(status, statuses);
 }
 
 export function recordComboFailure(comboName, modelStr, status, cfg = {}) {

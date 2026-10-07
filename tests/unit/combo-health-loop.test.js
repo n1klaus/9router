@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach } from "vitest";
 import { handleComboChat, resetComboRotation } from "../../open-sse/services/combo.js";
 import { recordComboFailure, resetComboHealth } from "../../open-sse/services/comboHealth.js";
 
-const CFG = { threshold: 3, resetMs: 600000, statuses: [] };
+const CFG = { threshold: 3, resetMs: 86400000, statuses: [] };
 const noopLog = { info() {}, warn() {}, debug() {}, error() {} };
 // Real Response objects, mirroring tests/unit/commandcode-executor.test.js.
 const dead = () => new Response(JSON.stringify({ error: { message: "model not found" } }), { status: 404, headers: { "Content-Type": "application/json" } });
@@ -34,7 +34,7 @@ describe("handleComboChat unhealthy skip", () => {
   });
 
   it("records failures while falling through, then skips", async () => {
-    const cfg = { threshold: 2, resetMs: 600000, statuses: [] };
+    const cfg = { threshold: 2, resetMs: 86400000, statuses: [] };
     expect((await run(["p/dead", "p/live"], cfg)).calls).toEqual(["p/dead", "p/live"]); // failure 1
     expect((await run(["p/dead", "p/live"], cfg)).calls).toEqual(["p/dead", "p/live"]); // failure 2 → skipped
     expect((await run(["p/dead", "p/live"], cfg)).calls).toEqual(["p/live"]);

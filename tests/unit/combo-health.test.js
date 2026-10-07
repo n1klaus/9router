@@ -74,4 +74,15 @@ describe("comboHealth", () => {
       vi.useRealTimers();
     }
   });
+
+  it("counts whole classes via 4xx/5xx markers", () => {
+    const cfg = { threshold: 1, resetMs: 600000, statuses: ["4xx"] };
+    recordComboFailure("C", "p/4", 418, cfg);
+    recordComboFailure("C", "p/5", 503, cfg);
+    expect(getSkippedModels("C", ["p/4", "p/5"], cfg)).toEqual(["p/4"]);
+    const both = { threshold: 1, resetMs: 600000, statuses: ["4xx", "5xx"] };
+    recordComboFailure("C", "p/4", 418, both);
+    recordComboFailure("C", "p/5", 503, both);
+    expect(getSkippedModels("C", ["p/4", "p/5"], both)).toEqual(["p/4", "p/5"]);
+  });
 });

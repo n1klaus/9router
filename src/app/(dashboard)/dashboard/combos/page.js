@@ -9,6 +9,7 @@ import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModa
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes } from "@/shared/utils/unhealthyStatuses";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -564,19 +565,21 @@ const fmtK = (n) => {
 
 function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
-  const statusesDefault = strategy.unhealthyStatuses == null
-    ? ""
-    : (strategy.unhealthyStatuses.length === 0 ? "all" : strategy.unhealthyStatuses.join(", "));
+  const [statusesNonce, setStatusesNonce] = useState(0);
+  const cardClasses = splitStatusClasses(strategy.unhealthyStatuses).classes;
+  const statusesDefault = formatStatusCodes(strategy.unhealthyStatuses);
   // Uncontrolled input keyed by the persisted override: remounts with fresh
-  // defaults whenever the saved value changes, no sync effect needed.
-  const statusesKey = JSON.stringify(strategy.unhealthyStatuses ?? null);
+  // defaults on save; invalid input bumps the nonce to revert to saved.
+  const statusesKey = `${JSON.stringify(strategy.unhealthyStatuses ?? null)}:${statusesNonce}`;
   const commitStatuses = (text) => {
-    const t = (text || "").trim().toLowerCase();
-    if (t === "") return onSetStrategy({ unhealthyStatuses: null });
-    if (t === "all") return onSetStrategy({ unhealthyStatuses: [] });
-    const list = t.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
-    onSetStrategy({ unhealthyStatuses: list.length ? list : null });
+    const typed = parseStatusesInput(text);
+    if (typed === null) { setStatusesNonce((n) => n + 1); return; }
+    const next = typed.length === 0
+      ? (cardClasses.length ? [...cardClasses] : null)
+      : [...cardClasses, ...typed];
+    onSetStrategy({ unhealthyStatuses: next });
   };
+  const toggleCardClass = (marker, on) => onSetStrategy({ unhealthyStatuses: toggleStatusClass(strategy.unhealthyStatuses ?? [], marker, on) });
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
@@ -733,11 +736,23 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
         </label>
         <label className="flex items-center gap-1">
           statuses
+          {["4xx", "5xx"].map((marker) => (
+            <label key={marker} className="flex cursor-pointer items-center gap-1 select-none" title={`all ${marker} errors`}>
+              <input
+                type="checkbox"
+                checked={cardClasses.includes(marker)}
+                onChange={() => toggleCardClass(marker, !cardClasses.includes(marker))}
+                className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+              />
+              {marker}
+            </label>
+          ))}
           <Input
             key={statusesKey}
             placeholder="inherit"
             defaultValue={statusesDefault}
             onBlur={(e) => commitStatuses(e.target.value)}
+            disabled={cardClasses.length > 0}
             className="w-28 text-center"
           />
         </label>
