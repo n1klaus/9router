@@ -6,6 +6,7 @@ import Modal, { ConfirmModal } from "@/shared/components/Modal";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
+import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes } from "@/shared/utils/unhealthyStatuses";
 import { APP_CONFIG } from "@/shared/constants/config";
 import { LOCALE_COOKIE, normalizeLocale } from "@/i18n/config";
 import { LOCALE_FLAGS } from "@/shared/constants/locales";
@@ -46,6 +47,7 @@ export default function ProfilePage() {
   const [oidcLoading, setOidcLoading] = useState(false);
   const [oidcTestLoading, setOidcTestLoading] = useState(false);
   const [oidcTestStatus, setOidcTestStatus] = useState({ type: "", message: "" });
+  const [unhealthyStatusesText, setUnhealthyStatusesText] = useState("");
   const [oidcExpanded, setOidcExpanded] = useState(false);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -92,6 +94,7 @@ export default function ProfilePage() {
       .then((res) => res.json())
       .then((data) => {
         setSettings(data);
+        setUnhealthyStatusesText((data?.comboUnhealthyStatuses || []).join(", "));
         setOidcForm({
           authMode: data?.authMode || "password",
           oidcIssuerUrl: data?.oidcIssuerUrl || "",
@@ -325,6 +328,52 @@ export default function ProfilePage() {
       }
     } catch (err) {
       console.error("Failed to update combo sticky limit:", err);
+    }
+  };
+  const updateComboUnhealthyThreshold = async (value) => {
+    const n = parseInt(value, 10);
+    if (isNaN(n) || n < 1 || n > 20) return;
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboUnhealthyThreshold: n }),
+      });
+      if (res.ok) setSettings(prev => ({ ...prev, comboUnhealthyThreshold: n }));
+    } catch (err) {
+      console.error("Failed to update combo unhealthy threshold:", err);
+    }
+  };
+
+  const updateComboUnhealthyReset = async (value) => {
+    const minutes = parseInt(value, 10);
+    if (isNaN(minutes) || minutes < 1 || minutes > 1440) return;
+    const ms = minutes * 60000;
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboUnhealthyResetMs: ms }),
+      });
+      if (res.ok) setSettings(prev => ({ ...prev, comboUnhealthyResetMs: ms }));
+    } catch (err) {
+      console.error("Failed to update combo unhealthy reset window:", err);
+    }
+  };
+
+  const updateComboUnhealthyStatuses = async (list) => {
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboUnhealthyStatuses: list }),
+      });
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, comboUnhealthyStatuses: list }));
+        setUnhealthyStatusesText(formatStatusCodes(list));
+      }
+    } catch (err) {
+      console.error("Failed to update combo unhealthy statuses:", err);
     }
   };
 
@@ -1523,6 +1572,99 @@ export default function ProfilePage() {
                 ? ` Combos rotate after ${settings.comboStickyRoundRobinLimit || 1} call${(settings.comboStickyRoundRobinLimit || 1) === 1 ? "" : "s"} per model.`
                 : " Combos always start with their first model."}
             </p>
+          </div>
+        </Card>
+        {/* Combo Unhealthy Skip */}
+        <Card>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500 shrink-0">
+              <span className="material-symbols-outlined text-[20px]">health_and_safety</span>
+            </div>
+            <h3 className="text-base sm:text-lg font-semibold">Combo Unhealthy Skip</h3>
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">Failure threshold</p>
+                <p className="text-sm text-text-muted">After N consecutive failures the model is skipped automatically until the reset window is over (1–20)</p>
+              </div>
+              <Input
+                type="number"
+                min="1"
+                max="20"
+                value={settings.comboUnhealthyThreshold ?? 3}
+                onChange={(e) => updateComboUnhealthyThreshold(e.target.value)}
+                disabled={loading}
+                className="w-20 text-center"
+              />
+            </div>
+            <div className="flex items-center justify-between pt-2 border-t border-border/50">
+              <div>
+                <p className="font-medium">Reset window (minutes)</p>
+                <p className="text-sm text-text-muted">Skipped models are retried after this window (1–1440, default 1440 = 24 hours)</p>
+              </div>
+              <Input
+                type="number"
+                min="1"
+                max="1440"
+                value={Math.max(1, Math.round((settings.comboUnhealthyResetMs ?? 86400000) / 60000))}
+                onChange={(e) => updateComboUnhealthyReset(e.target.value)}
+                disabled={loading}
+                className="w-20 text-center"
+              />
+            </div>
+            <div className="flex flex-col gap-2 pt-2 border-t border-border/50">
+              <div>
+                <p className="font-medium">Counted error codes</p>
+                <p className="text-sm text-text-muted">HTTP statuses that count toward the threshold (classes, codes, or both; empty = all errors)</p>
+              </div>
+              <div className="flex flex-wrap items-center gap-4">
+                {["4xx", "5xx"].map((marker) => {
+                  const { classes } = splitStatusClasses(settings.comboUnhealthyStatuses);
+                  const on = classes.includes(marker);
+                  return (
+                    <label key={marker} className="flex cursor-pointer items-center gap-2 text-sm text-text-main select-none">
+                      <input
+                        type="checkbox"
+                        checked={on}
+                        onChange={() => {
+                          // Last writer wins: a class toggle raced with typing is
+                          // authoritative; typed text stays as explicit codes only.
+                          const committed = splitStatusClasses(settings.comboUnhealthyStatuses);
+                          const typed = parseStatusesInput(unhealthyStatusesText) ?? [];
+                          const next = toggleStatusClass(settings.comboUnhealthyStatuses, marker, !on);
+                          if (!on) {
+                            setUnhealthyStatusesText(formatStatusCodes(typed));
+                          } else {
+                            setUnhealthyStatusesText(formatStatusCodes([...committed.codes, ...typed]));
+                          }
+                          updateComboUnhealthyStatuses(next);
+                        }}
+                        disabled={loading}
+                        className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
+                      />
+                      all {marker} errors
+                    </label>
+                  );
+                })}
+              </div>
+              <Input
+                value={unhealthyStatusesText}
+                onChange={(e) => setUnhealthyStatusesText(e.target.value)}
+                onBlur={() => {
+                  const typed = parseStatusesInput(unhealthyStatusesText);
+                  if (typed === null) {
+                    setUnhealthyStatusesText(formatStatusCodes(settings.comboUnhealthyStatuses));
+                    return;
+                  }
+                  const { classes } = splitStatusClasses(settings.comboUnhealthyStatuses);
+                  updateComboUnhealthyStatuses([...classes, ...typed]);
+                }}
+                placeholder="404, 401, 402, 403"
+                disabled={loading || splitStatusClasses(settings.comboUnhealthyStatuses).classes.length > 0}
+                className="w-full text-center"
+              />
+            </div>
           </div>
         </Card>
 

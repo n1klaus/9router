@@ -17,6 +17,9 @@ const DEFAULT_SETTINGS = {
   comboStrategy: "fallback",
   comboStickyRoundRobinLimit: 1,
   comboStrategies: {},
+  comboUnhealthyThreshold: 3,
+  comboUnhealthyResetMs: 24 * 60 * 60 * 1000,
+  comboUnhealthyStatuses: [404, 401, 402, 403],
   capacityAdapter: {
     vision: { enabled: true, roundRobin: false, models: [] },
     pdf: { enabled: false, roundRobin: false, models: [] },

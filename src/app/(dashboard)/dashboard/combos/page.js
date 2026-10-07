@@ -9,6 +9,7 @@ import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModa
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
+import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes } from "@/shared/utils/unhealthyStatuses";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -308,18 +309,20 @@ export default function CombosPage() {
     });
   };
 
-  // Merge a per-combo strategy patch into settings.comboStrategies. Passing an empty
-  // patch (strategy back to default "fallback") drops the entry entirely.
+  // Merge a per-combo strategy patch into settings.comboStrategies. null values
+  // clear a key; a default "fallback" strategy is dropped; an entry with no
+  // remaining keys is removed.
   const handleSetComboStrategy = async (comboName, patch) => {
     try {
       const updated = { ...comboStrategies };
-      const next = { ...(updated[comboName] || {}), ...patch };
-      // Prune to keep settings clean: default fallback with no extras = no entry.
-      if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") {
-        delete updated[comboName];
-      } else {
-        updated[comboName] = next;
+      const next = { ...(updated[comboName] || {}) };
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null || value === undefined) delete next[key];
+        else next[key] = value;
       }
+      if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") delete next.fallbackStrategy;
+      if (Object.keys(next).length === 0) delete updated[comboName];
+      else updated[comboName] = next;
 
       await persistComboStrategies(updated);
     } catch (error) {
@@ -333,14 +336,11 @@ export default function CombosPage() {
     try {
       const updated = { ...comboStrategies };
       for (const combo of selectedCombos) {
-        if (!strategy || strategy === "fallback") {
-          delete updated[combo.name];
-        } else {
-          updated[combo.name] = {
-            ...(updated[combo.name] || {}),
-            fallbackStrategy: strategy,
-          };
-        }
+        const next = { ...(updated[combo.name] || {}) };
+        if (strategy && strategy !== "fallback") next.fallbackStrategy = strategy;
+        else delete next.fallbackStrategy;
+        if (Object.keys(next).length === 0) delete updated[combo.name];
+        else updated[combo.name] = next;
       }
       await persistComboStrategies(updated);
     } catch (error) {
@@ -565,6 +565,21 @@ const fmtK = (n) => {
 
 function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
+  const [statusesNonce, setStatusesNonce] = useState(0);
+  const cardClasses = splitStatusClasses(strategy.unhealthyStatuses).classes;
+  const statusesDefault = formatStatusCodes(strategy.unhealthyStatuses);
+  // Uncontrolled input keyed by the persisted override: remounts with fresh
+  // defaults on save; invalid input bumps the nonce to revert to saved.
+  const statusesKey = `${JSON.stringify(strategy.unhealthyStatuses ?? null)}:${statusesNonce}`;
+  const commitStatuses = (text) => {
+    const typed = parseStatusesInput(text);
+    if (typed === null) { setStatusesNonce((n) => n + 1); return; }
+    const next = typed.length === 0
+      ? (cardClasses.length ? [...cardClasses] : null)
+      : [...cardClasses, ...typed];
+    onSetStrategy({ unhealthyStatuses: next });
+  };
+  const toggleCardClass = (marker, on) => onSetStrategy({ unhealthyStatuses: toggleStatusClass(strategy.unhealthyStatuses ?? [], marker, on) });
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
@@ -685,6 +700,62 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             </button>
           </div>
         </div>
+      </div>
+      {/* Unhealthy skip overrides — empty = inherit global */}
+      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-border/50 pt-2 text-[11px] text-text-muted">
+        <span className="font-medium">Unhealthy skip</span>
+        <label className="flex items-center gap-1">
+          threshold
+          <Input
+            type="number"
+            min="1"
+            max="20"
+            placeholder="inherit"
+            value={strategy.unhealthyThreshold ?? ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              onSetStrategy({ unhealthyThreshold: raw === "" ? null : Math.min(20, Math.max(1, parseInt(raw, 10) || 1)) });
+            }}
+            className="w-16 text-center"
+          />
+        </label>
+        <label className="flex items-center gap-1">
+          reset min
+          <Input
+            type="number"
+            min="1"
+            max="1440"
+            placeholder="inherit"
+            value={strategy.unhealthyResetMs != null ? Math.round(strategy.unhealthyResetMs / 60000) : ""}
+            onChange={(e) => {
+              const raw = e.target.value;
+              onSetStrategy({ unhealthyResetMs: raw === "" ? null : Math.min(1440, Math.max(1, parseInt(raw, 10) || 1)) * 60000 });
+            }}
+            className="w-16 text-center"
+          />
+        </label>
+        <label className="flex items-center gap-1">
+          statuses
+          {["4xx", "5xx"].map((marker) => (
+            <label key={marker} className="flex cursor-pointer items-center gap-1 select-none" title={`all ${marker} errors`}>
+              <input
+                type="checkbox"
+                checked={cardClasses.includes(marker)}
+                onChange={() => toggleCardClass(marker, !cardClasses.includes(marker))}
+                className="h-3.5 w-3.5 rounded border-gray-300 text-primary focus:ring-primary"
+              />
+              {marker}
+            </label>
+          ))}
+          <Input
+            key={statusesKey}
+            placeholder="inherit"
+            defaultValue={statusesDefault}
+            onBlur={(e) => commitStatuses(e.target.value)}
+            disabled={cardClasses.length > 0}
+            className="w-28 text-center"
+          />
+        </label>
       </div>
 
       {/* Judge model picker (single-select; combo members make natural judges too) */}

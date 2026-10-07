@@ -50,6 +50,12 @@ export async function handleTts(request) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[modelStr]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
+    const comboSpecific = comboStrategies[modelStr] || {};
+    const healthCfg = {
+      threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
+      resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
+      statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
+    };
     log.info("TTS", `Combo "${modelStr}" with ${comboModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
@@ -59,6 +65,7 @@ export async function handleTts(request) {
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit,
+      healthCfg
     });
   }
 

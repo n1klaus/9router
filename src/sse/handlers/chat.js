@@ -124,6 +124,12 @@ export async function handleChat(request, clientRawRequest = null) {
     }
 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
+    const comboSpecific = comboStrategies[modelStr] || {};
+    const healthCfg = {
+      threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
+      resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
+      statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
+    };
     log.info("CHAT", `Combo "${modelStr}" with ${augmentedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
@@ -135,7 +141,8 @@ export async function handleChat(request, clientRawRequest = null) {
       log,
       comboName: modelStr,
       comboStrategy,
-      comboStickyLimit
+      comboStickyLimit,
+      healthCfg
     });
   }
 
@@ -201,6 +208,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
 
       const comboStickyLimit = chatSettings.comboStickyRoundRobinLimit;
+      const comboSpecific = comboStrategies[modelStr] || {};
+      const healthCfg = {
+        threshold: comboSpecific.unhealthyThreshold ?? chatSettings.comboUnhealthyThreshold,
+        resetMs: comboSpecific.unhealthyResetMs ?? chatSettings.comboUnhealthyResetMs,
+        statuses: comboSpecific.unhealthyStatuses ?? chatSettings.comboUnhealthyStatuses,
+      };
       log.info("CHAT", `Combo "${modelStr}" with ${augmentedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
       return handleComboChat({
         body,
@@ -212,7 +225,8 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         log,
         comboName: modelStr,
         comboStrategy,
-        comboStickyLimit
+        comboStickyLimit,
+        healthCfg
       });
     }
     log.warn("CHAT", "Invalid model format", { model: modelStr });

@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getComboById, updateCombo, deleteCombo, getComboByName } from "@/lib/localDb";
 import { resetComboRotation } from "open-sse/services/combo.js";
+import { resetComboHealth } from "open-sse/services/comboHealth.js";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -52,6 +53,8 @@ export async function PUT(request, { params }) {
     // Invalidate rotation state (models/strategy/name may have changed)
     if (prev?.name) resetComboRotation(prev.name);
     if (combo.name && combo.name !== prev?.name) resetComboRotation(combo.name);
+    if (prev?.name) resetComboHealth(prev.name);
+    if (combo.name && combo.name !== prev?.name) resetComboHealth(combo.name);
 
     return NextResponse.json(combo);
   } catch (error) {
@@ -72,6 +75,7 @@ export async function DELETE(request, { params }) {
     }
 
     if (prev?.name) resetComboRotation(prev.name);
+    if (prev?.name) resetComboHealth(prev.name);
     
     return NextResponse.json({ success: true });
   } catch (error) {

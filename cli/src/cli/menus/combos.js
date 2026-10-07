@@ -84,6 +84,41 @@ async function handleEditSingleCombo(combo) {
   
   // Use new models if any were added, otherwise keep current
   const finalModels = models.length > 0 ? models : combo.models;
+  // Per-combo unhealthy-skip overrides live in settings.comboStrategies[name],
+  // not on the combo record. Enter = keep, "-" = inherit global.
+  const settingsRes = await api.getSettings();
+  const settingsData = (settingsRes.success && settingsRes.data) || {};
+  const comboStrategies = { ...(settingsData.comboStrategies || {}) };
+  const override = { ...(comboStrategies[name] || {}) };
+  console.log("\nUnhealthy skip (Enter = keep, '-' = inherit global):");
+
+  const thRaw = ((await prompt(`  Threshold 1-20 (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
+  if (thRaw === "-") delete override.unhealthyThreshold;
+  else if (thRaw !== "") override.unhealthyThreshold = Math.min(20, Math.max(1, parseInt(thRaw, 10) || 1));
+
+  const resetGlobalMin = Math.round((settingsData.comboUnhealthyResetMs ?? 86400000) / 60000);
+  const resetRaw = ((await prompt(`  Reset minutes 1-1440 (global ${resetGlobalMin}): `)) || "").trim();
+  if (resetRaw === "-") delete override.unhealthyResetMs;
+  else if (resetRaw !== "") override.unhealthyResetMs = Math.min(1440, Math.max(1, parseInt(resetRaw, 10) || 1)) * 60000;
+
+  const statusesGlobal = settingsData.comboUnhealthyStatuses ?? [];
+  const curStatuses = override.unhealthyStatuses;
+  const statusesLabel = curStatuses === undefined
+    ? `global ${statusesGlobal.join(",") || "all"}`
+    : (curStatuses.length === 0 ? "all" : curStatuses.join(","));
+  const stRaw = ((await prompt(`  Statuses csv or "all" (${statusesLabel}): `)) || "").trim();
+  if (stRaw === "-") delete override.unhealthyStatuses;
+  else if (stRaw !== "") {
+    override.unhealthyStatuses = stRaw.toLowerCase() === "all"
+      ? []
+      : stRaw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  }
+
+  if (!override.fallbackStrategy || override.fallbackStrategy === "fallback") delete override.fallbackStrategy;
+  if (Object.keys(override).length === 0) delete comboStrategies[name];
+  else comboStrategies[name] = override;
+  const strategySync = await api.updateSettings({ comboStrategies });
+  if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
   
   const result = await api.updateCombo(combo.id, { name, models: finalModels });
   

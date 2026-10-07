@@ -1,5 +1,5 @@
 const api = require("../api/client");
-const { confirm, pause } = require("../utils/input");
+const { confirm, pause, prompt } = require("../utils/input");
 const { showStatus } = require("../utils/display");
 const { showMenuWithBack } = require("../utils/menuHelper");
 
@@ -81,6 +81,18 @@ async function showSettingsMenu(breadcrumb = []) {
           return `Token Saver (Headroom): ${on ? "ON" : "OFF"} → toggle`;
         },
         action: async (d) => { await toggleHeadroom(d?.settings?.headroomEnabled === true); return true; }
+      },
+      {
+        label: (d) => `Combo unhealthy: failure threshold (current ${d?.settings?.comboUnhealthyThreshold ?? 3})`,
+        action: async (d) => { await setComboUnhealthyThreshold(d?.settings?.comboUnhealthyThreshold ?? 3); return true; }
+      },
+      {
+        label: (d) => `Combo unhealthy: reset window (current ${Math.round((d?.settings?.comboUnhealthyResetMs ?? 86400000) / 60000)} min)`,
+        action: async (d) => { await setComboUnhealthyReset(d?.settings?.comboUnhealthyResetMs ?? 86400000); return true; }
+      },
+      {
+        label: (d) => `Combo unhealthy: status codes (current ${(d?.settings?.comboUnhealthyStatuses ?? []).join(",") || "all"})`,
+        action: async (d) => { await setComboUnhealthyStatuses(d?.settings?.comboUnhealthyStatuses ?? []); return true; }
       },
       {
         label: "🔑 Reset Password to Default",
@@ -177,6 +189,51 @@ async function toggleHeadroom(currentlyOn) {
   } else {
     showStatus(`Failed: ${result.error}`, "error");
   }
+  await pause();
+}
+/**
+ * Set global combo unhealthy-skip failure threshold via API
+ * @param {number} current - Current threshold
+ */
+async function setComboUnhealthyThreshold(current) {
+  const raw = ((await prompt(`Failure threshold 1-20 (current ${current}, Enter to keep): `)) || "").trim();
+  if (raw === "") { showStatus("Kept current threshold", "info"); await pause(); return; }
+  const n = Math.min(20, Math.max(1, parseInt(raw, 10) || current));
+  const result = await api.updateSettings({ comboUnhealthyThreshold: n });
+  if (result.success) showStatus(`Combo unhealthy threshold set to ${n}`, "success");
+  else showStatus(`Failed: ${result.error}`, "error");
+  await pause();
+}
+
+/**
+ * Set global combo unhealthy-skip reset window via API
+ * @param {number} currentMs - Current reset window in ms
+ */
+async function setComboUnhealthyReset(currentMs) {
+  const currentMin = Math.round(currentMs / 60000);
+  const raw = ((await prompt(`Reset window minutes 1-1440 (current ${currentMin}, Enter to keep): `)) || "").trim();
+  if (raw === "") { showStatus("Kept current reset window", "info"); await pause(); return; }
+  const minutes = Math.min(1440, Math.max(1, parseInt(raw, 10) || currentMin));
+  const result = await api.updateSettings({ comboUnhealthyResetMs: minutes * 60000 });
+  if (result.success) showStatus(`Combo unhealthy reset window set to ${minutes} min`, "success");
+  else showStatus(`Failed: ${result.error}`, "error");
+  await pause();
+}
+
+/**
+ * Set global combo unhealthy-skip counted status codes via API
+ * @param {Array<number>} current - Current status list (empty = all errors)
+ */
+async function setComboUnhealthyStatuses(current) {
+  const label = (current || []).join(",") || "all";
+  const raw = ((await prompt(`Counted status codes csv or "all" (current ${label}, Enter to keep): `)) || "").trim();
+  if (raw === "") { showStatus("Kept current status list", "info"); await pause(); return; }
+  const statuses = raw.toLowerCase() === "all"
+    ? []
+    : raw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  const result = await api.updateSettings({ comboUnhealthyStatuses: statuses });
+  if (result.success) showStatus(`Combo unhealthy statuses set to ${statuses.join(",") || "all"}`, "success");
+  else showStatus(`Failed: ${result.error}`, "error");
   await pause();
 }
 

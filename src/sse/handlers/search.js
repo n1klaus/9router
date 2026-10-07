@@ -75,6 +75,12 @@ export async function handleSearch(request) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[providerInput]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
+    const comboSpecific = comboStrategies[providerInput] || {};
+    const healthCfg = {
+      threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
+      resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
+      statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
+    };
     log.info("SEARCH", `Combo "${providerInput}" with ${comboModels.length} providers (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
@@ -83,7 +89,8 @@ export async function handleSearch(request) {
       log,
       comboName: providerInput,
       comboStrategy,
-      comboStickyLimit
+      comboStickyLimit,
+      healthCfg
     });
   }
 

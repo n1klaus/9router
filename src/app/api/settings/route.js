@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
+import { resetComboHealth } from "open-sse/services/comboHealth.js";
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
@@ -94,6 +95,15 @@ export async function PATCH(request) {
       Object.prototype.hasOwnProperty.call(body, "comboStrategies")
     ) {
       resetComboRotation();
+    }
+    // Invalidate health state when unhealthy-skip settings change
+    if (
+      Object.prototype.hasOwnProperty.call(body, "comboUnhealthyThreshold") ||
+      Object.prototype.hasOwnProperty.call(body, "comboUnhealthyResetMs") ||
+      Object.prototype.hasOwnProperty.call(body, "comboUnhealthyStatuses") ||
+      Object.prototype.hasOwnProperty.call(body, "comboStrategies")
+    ) {
+      resetComboHealth();
     }
 
     if (
