@@ -1586,7 +1586,7 @@ export default function ProfilePage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium">Failure threshold</p>
-                <p className="text-sm text-text-muted">After N consecutive failures the model is skipped automatically until the 24-hour window is over (1–20)</p>
+                <p className="text-sm text-text-muted">After N consecutive failures the model is skipped automatically until the reset window is over (1–20)</p>
               </div>
               <Input
                 type="number"
