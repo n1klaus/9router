@@ -528,6 +528,47 @@ Dashboard → Combos → Clone "premium-coding"
 
 **Use case**: Create variations for different scenarios.
 
+### Unhealthy Model Skip
+
+Fallback and round-robin combos remember failing models and skip them, so a
+persistently dead model stops slowing every request:
+
+```
+Dashboard → Profile → Combo Unhealthy Skip:
+  Failure threshold: 3
+  Reset window: 10 min
+  Counted error codes: 404, 401, 402, 403 (empty = all errors)
+```
+
+**What counts as a failure**: a fallbackable attempt whose HTTP status is in
+the counted-error list. An empty list means every fallbackable error counts.
+Skipping only applies while falling through — a non-fallbackable error never
+counts against the model.
+
+**Threshold semantics**: skips kick in after N *consecutive* failures that all
+fall inside the reset window. A lone old failure decays: if the failure streak
+started longer ago than the reset window, the next failure restarts the streak.
+A successful attempt on a model clears its streak immediately.
+
+**Reset semantics**: a skipped model is retried automatically once its window
+expires (lazy expiry on the next request). If *every* model is currently
+skipped, the combo tries them all anyway — health state never hard-fails a
+request, it only reorders attempts.
+
+**Per-combo overrides**: on the Combos page each card has an "Unhealthy skip"
+row writing `{ unhealthyThreshold, unhealthyResetMs, unhealthyStatuses }`
+into that combo's strategy entry. Empty fields inherit the global values;
+typing `all` in the statuses field means the explicit empty list (count every
+error) rather than inherit.
+
+**In-memory caveat**: health state lives in the server process and resets on
+restart, like combo rotation state. Account-level per-model locks (failures
+that trigger provider backoff) are stored separately and survive restarts.
+
+**CLI**: `Settings` menu → the three "Combo unhealthy" items for the globals;
+`Combos` → a combo → `Edit Combo` for per-combo overrides (Enter = keep,
+`-` = inherit global, `all` = every error).
+
 ---
 
 ## Troubleshooting
