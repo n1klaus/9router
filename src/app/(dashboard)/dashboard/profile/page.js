@@ -46,6 +46,7 @@ export default function ProfilePage() {
   const [oidcLoading, setOidcLoading] = useState(false);
   const [oidcTestLoading, setOidcTestLoading] = useState(false);
   const [oidcTestStatus, setOidcTestStatus] = useState({ type: "", message: "" });
+  const [unhealthyStatusesText, setUnhealthyStatusesText] = useState("");
   const [oidcExpanded, setOidcExpanded] = useState(false);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -92,6 +93,7 @@ export default function ProfilePage() {
       .then((res) => res.json())
       .then((data) => {
         setSettings(data);
+        setUnhealthyStatusesText((data?.comboUnhealthyStatuses || []).join(", "));
         setOidcForm({
           authMode: data?.authMode || "password",
           oidcIssuerUrl: data?.oidcIssuerUrl || "",
@@ -325,6 +327,53 @@ export default function ProfilePage() {
       }
     } catch (err) {
       console.error("Failed to update combo sticky limit:", err);
+    }
+  };
+  const updateComboUnhealthyThreshold = async (value) => {
+    const n = parseInt(value, 10);
+    if (isNaN(n) || n < 1 || n > 20) return;
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboUnhealthyThreshold: n }),
+      });
+      if (res.ok) setSettings(prev => ({ ...prev, comboUnhealthyThreshold: n }));
+    } catch (err) {
+      console.error("Failed to update combo unhealthy threshold:", err);
+    }
+  };
+
+  const updateComboUnhealthyReset = async (value) => {
+    const minutes = parseInt(value, 10);
+    if (isNaN(minutes) || minutes < 1 || minutes > 1440) return;
+    const ms = minutes * 60000;
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboUnhealthyResetMs: ms }),
+      });
+      if (res.ok) setSettings(prev => ({ ...prev, comboUnhealthyResetMs: ms }));
+    } catch (err) {
+      console.error("Failed to update combo unhealthy reset window:", err);
+    }
+  };
+
+  const updateComboUnhealthyStatuses = async (text) => {
+    const trimmed = (text || "").trim();
+    const statuses = trimmed === ""
+      ? []
+      : trimmed.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+    try {
+      const res = await fetch("/api/settings", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ comboUnhealthyStatuses: statuses }),
+      });
+      if (res.ok) setSettings(prev => ({ ...prev, comboUnhealthyStatuses: statuses }));
+    } catch (err) {
+      console.error("Failed to update combo unhealthy statuses:", err);
     }
   };
 
@@ -1523,6 +1572,61 @@ export default function ProfilePage() {
                 ? ` Combos rotate after ${settings.comboStickyRoundRobinLimit || 1} call${(settings.comboStickyRoundRobinLimit || 1) === 1 ? "" : "s"} per model.`
                 : " Combos always start with their first model."}
             </p>
+          </div>
+        </Card>
+        {/* Combo Unhealthy Skip */}
+        <Card>
+          <div className="flex items-center gap-3 mb-4">
+            <div className="p-2 rounded-lg bg-amber-500/10 text-amber-500 shrink-0">
+              <span className="material-symbols-outlined text-[20px]">health_and_safety</span>
+            </div>
+            <h3 className="text-base sm:text-lg font-semibold">Combo Unhealthy Skip</h3>
+          </div>
+          <div className="flex flex-col gap-4">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="font-medium">Failure threshold</p>
+                <p className="text-sm text-text-muted">Consecutive failures before a combo model is skipped (1–20)</p>
+              </div>
+              <Input
+                type="number"
+                min="1"
+                max="20"
+                value={settings.comboUnhealthyThreshold ?? 3}
+                onChange={(e) => updateComboUnhealthyThreshold(e.target.value)}
+                disabled={loading}
+                className="w-20 text-center"
+              />
+            </div>
+            <div className="flex items-center justify-between pt-2 border-t border-border/50">
+              <div>
+                <p className="font-medium">Reset window (minutes)</p>
+                <p className="text-sm text-text-muted">Skipped models are retried after this window (1–1440)</p>
+              </div>
+              <Input
+                type="number"
+                min="1"
+                max="1440"
+                value={Math.max(1, Math.round((settings.comboUnhealthyResetMs ?? 600000) / 60000))}
+                onChange={(e) => updateComboUnhealthyReset(e.target.value)}
+                disabled={loading}
+                className="w-20 text-center"
+              />
+            </div>
+            <div className="flex items-center justify-between gap-4 pt-2 border-t border-border/50">
+              <div>
+                <p className="font-medium">Counted error codes</p>
+                <p className="text-sm text-text-muted">HTTP statuses that count toward the threshold (comma separated, empty = all errors)</p>
+              </div>
+              <Input
+                value={unhealthyStatusesText}
+                onChange={(e) => setUnhealthyStatusesText(e.target.value)}
+                onBlur={() => updateComboUnhealthyStatuses(unhealthyStatusesText)}
+                placeholder="404, 401, 402, 403"
+                disabled={loading}
+                className="w-44 text-center"
+              />
+            </div>
           </div>
         </Card>
 
