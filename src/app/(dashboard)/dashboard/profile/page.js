@@ -1586,7 +1586,7 @@ export default function ProfilePage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="font-medium">Failure threshold</p>
-                <p className="text-sm text-text-muted">Consecutive failures before a combo model is skipped (1–20)</p>
+                <p className="text-sm text-text-muted">After N consecutive failures the model is skipped automatically until the 24-hour window is over (1–20)</p>
               </div>
               <Input
                 type="number"
@@ -1601,13 +1601,13 @@ export default function ProfilePage() {
             <div className="flex items-center justify-between pt-2 border-t border-border/50">
               <div>
                 <p className="font-medium">Reset window (minutes)</p>
-                <p className="text-sm text-text-muted">Skipped models are retried after this window (1–1440)</p>
+                <p className="text-sm text-text-muted">Skipped models are retried after this window (1–1440, default 1440 = 24 hours)</p>
               </div>
               <Input
                 type="number"
                 min="1"
                 max="1440"
-                value={Math.max(1, Math.round((settings.comboUnhealthyResetMs ?? 600000) / 60000))}
+                value={Math.max(1, Math.round((settings.comboUnhealthyResetMs ?? 86400000) / 60000))}
                 onChange={(e) => updateComboUnhealthyReset(e.target.value)}
                 disabled={loading}
                 className="w-20 text-center"

@@ -536,7 +536,7 @@ persistently dead model stops slowing every request:
 ```
 Dashboard → Profile → Combo Unhealthy Skip:
   Failure threshold: 3
-  Reset window: 10 min
+  Reset window: 24 hours
   Counted error codes: 404, 401, 402, 403 (empty = all errors)
 ```
 

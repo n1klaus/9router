@@ -18,7 +18,7 @@ const DEFAULT_SETTINGS = {
   comboStickyRoundRobinLimit: 1,
   comboStrategies: {},
   comboUnhealthyThreshold: 3,
-  comboUnhealthyResetMs: 10 * 60 * 1000,
+  comboUnhealthyResetMs: 24 * 60 * 60 * 1000,
   comboUnhealthyStatuses: [404, 401, 402, 403],
   capacityAdapter: {
     vision: { enabled: true, roundRobin: false, models: [] },

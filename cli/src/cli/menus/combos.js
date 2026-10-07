@@ -96,7 +96,7 @@ async function handleEditSingleCombo(combo) {
   if (thRaw === "-") delete override.unhealthyThreshold;
   else if (thRaw !== "") override.unhealthyThreshold = Math.min(20, Math.max(1, parseInt(thRaw, 10) || 1));
 
-  const resetGlobalMin = Math.round((settingsData.comboUnhealthyResetMs ?? 600000) / 60000);
+  const resetGlobalMin = Math.round((settingsData.comboUnhealthyResetMs ?? 86400000) / 60000);
   const resetRaw = ((await prompt(`  Reset minutes 1-1440 (global ${resetGlobalMin}): `)) || "").trim();
   if (resetRaw === "-") delete override.unhealthyResetMs;
   else if (resetRaw !== "") override.unhealthyResetMs = Math.min(1440, Math.max(1, parseInt(resetRaw, 10) || 1)) * 60000;

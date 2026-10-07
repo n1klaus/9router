@@ -61,4 +61,17 @@ describe("comboHealth", () => {
       vi.useRealTimers();
     }
   });
+
+  it("defaults the reset window to 24 hours", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      recordComboFailure("C", "p/m1", 404, { threshold: 1, statuses: [] });
+      expect(getSkippedModels("C", ["p/m1"], {})).toEqual(["p/m1"]);
+      vi.advanceTimersByTime(600001);
+      expect(getSkippedModels("C", ["p/m1"], {})).toEqual(["p/m1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

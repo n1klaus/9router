@@ -12,7 +12,7 @@ function normalizeCfg(cfg = {}) {
   const resetMs = +cfg.resetMs;
   return {
     threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 3,
-    resetMs: Number.isFinite(resetMs) && resetMs > 0 ? resetMs : 10 * 60 * 1000,
+    resetMs: Number.isFinite(resetMs) && resetMs > 0 ? resetMs : 24 * 60 * 60 * 1000,
     statuses: Array.isArray(cfg.statuses) ? cfg.statuses.map(Number).filter(Number.isFinite) : [],
   };
 }

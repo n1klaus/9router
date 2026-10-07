@@ -87,8 +87,8 @@ async function showSettingsMenu(breadcrumb = []) {
         action: async (d) => { await setComboUnhealthyThreshold(d?.settings?.comboUnhealthyThreshold ?? 3); return true; }
       },
       {
-        label: (d) => `Combo unhealthy: reset window (current ${Math.round((d?.settings?.comboUnhealthyResetMs ?? 600000) / 60000)} min)`,
-        action: async (d) => { await setComboUnhealthyReset(d?.settings?.comboUnhealthyResetMs ?? 600000); return true; }
+        label: (d) => `Combo unhealthy: reset window (current ${Math.round((d?.settings?.comboUnhealthyResetMs ?? 86400000) / 60000)} min)`,
+        action: async (d) => { await setComboUnhealthyReset(d?.settings?.comboUnhealthyResetMs ?? 86400000); return true; }
       },
       {
         label: (d) => `Combo unhealthy: status codes (current ${(d?.settings?.comboUnhealthyStatuses ?? []).join(",") || "all"})`,
