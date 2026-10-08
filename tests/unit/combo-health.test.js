@@ -85,4 +85,59 @@ describe("comboHealth", () => {
     recordComboFailure("C", "p/5", 503, both);
     expect(getSkippedModels("C", ["p/4", "p/5"], both)).toEqual(["p/4", "p/5"]);
   });
+
+  it("keeps a streak when every gap falls inside the window", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const cfg = { threshold: 3, resetMs: 600000, statuses: [] };
+      recordComboFailure("C", "p/m1", 404, cfg);
+      vi.advanceTimersByTime(cfg.resetMs - 1);
+      recordComboFailure("C", "p/m1", 404, cfg);
+      vi.advanceTimersByTime(cfg.resetMs - 1);
+      recordComboFailure("C", "p/m1", 404, cfg);
+      expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual(["p/m1"]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never extends a skip window: it expires one window after the crossing", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const cfg = { threshold: 1, resetMs: 600000, statuses: [] };
+      recordComboFailure("C", "p/m1", 404, cfg); // crossing: skip until t0 + window
+      vi.advanceTimersByTime(cfg.resetMs / 2);
+      recordComboFailure("C", "p/m1", 404, cfg); // must not push the window out
+      vi.advanceTimersByTime(cfg.resetMs / 2 + 1);
+      expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("reclaims entries for models that left the passed list", () => {
+    const cfg = { threshold: 2, resetMs: 600000, statuses: [] };
+    recordComboFailure("C", "p/old", 404, cfg);
+    expect(getSkippedModels("C", ["p/new"], cfg)).toEqual([]);
+    recordComboFailure("C", "p/old", 404, cfg);
+    // The first failure was reclaimed, so this is a fresh streak of 1.
+    expect(getSkippedModels("C", ["p/old"], cfg)).toEqual([]);
+  });
+
+  it("always counts an attempt that threw (null status)", () => {
+    const cfg = { threshold: 1, resetMs: 600000, statuses: [404] };
+    recordComboFailure("C", "p/boom", null, cfg);
+    expect(getSkippedModels("C", ["p/boom"], cfg)).toEqual(["p/boom"]);
+  });
+
+  it("defaults count 404/401/402/403 but not transient 5xx", () => {
+    recordComboFailure("C", "p/503", 503, { threshold: 1 });
+    expect(getSkippedModels("C", ["p/503"], { threshold: 1 })).toEqual([]);
+    recordComboFailure("C", "p/404", 404, { threshold: 1 });
+    expect(getSkippedModels("C", ["p/404"], { threshold: 1 })).toEqual(["p/404"]);
+    recordComboFailure("C", "p/any", 503, { threshold: 1, statuses: [] });
+    expect(getSkippedModels("C", ["p/any"], { threshold: 1, statuses: [] })).toEqual(["p/any"]);
+  });
 });

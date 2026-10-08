@@ -157,7 +157,8 @@ export async function handleChat(request, clientRawRequest = null) {
       ),
       log,
       comboName: modelStr,
-      comboStrategy: getActiveAdapterStrategy(requiredCapabilities, settings)
+      comboStrategy: getActiveAdapterStrategy(requiredCapabilities, settings),
+      healthCfg: resolveUnhealthyCfg((settings.comboStrategies || {})[modelStr] || {}, settings),
     });
   }
 

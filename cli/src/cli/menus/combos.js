@@ -96,44 +96,55 @@ async function handleEditSingleCombo(combo) {
     const settingsData = settingsRes.data || {};
     const comboStrategies = { ...(settingsData.comboStrategies || {}) };
     const override = { ...(comboStrategies[combo.name] || {}) };
+    let changed = false;
     console.log("\nUnhealthy skip (Enter = keep, '-' = inherit global):");
 
     const thRaw = ((await prompt(`  Threshold 1-20 (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
-    if (thRaw === "-") delete override.unhealthyThreshold;
-    else if (thRaw !== "") {
-      const n = parseInt(thRaw, 10);
-      if (Number.isFinite(n)) override.unhealthyThreshold = Math.min(20, Math.max(1, n));
-      else showStatus(`Invalid threshold "${thRaw}" — kept current`, "error");
+    if (thRaw === "-") {
+      if ("unhealthyThreshold" in override) { delete override.unhealthyThreshold; changed = true; }
+    } else if (thRaw !== "") {
+      const n = Number(thRaw);
+      if (Number.isInteger(n) && n >= 1 && n <= 20) {
+        if (override.unhealthyThreshold !== n) { override.unhealthyThreshold = n; changed = true; }
+      } else showStatus(`Invalid threshold "${thRaw}" (1-20) — kept current`, "error");
     }
 
     const resetGlobalMin = Math.round((settingsData.comboUnhealthyResetMs ?? 86400000) / 60000);
     const resetRaw = ((await prompt(`  Reset minutes 1-1440 (global ${resetGlobalMin}): `)) || "").trim();
-    if (resetRaw === "-") delete override.unhealthyResetMs;
-    else if (resetRaw !== "") {
-      const minutes = parseInt(resetRaw, 10);
-      if (Number.isFinite(minutes)) override.unhealthyResetMs = Math.min(1440, Math.max(1, minutes)) * 60000;
-      else showStatus(`Invalid reset window "${resetRaw}" — kept current`, "error");
+    if (resetRaw === "-") {
+      if ("unhealthyResetMs" in override) { delete override.unhealthyResetMs; changed = true; }
+    } else if (resetRaw !== "") {
+      const minutes = Number(resetRaw);
+      if (Number.isInteger(minutes) && minutes >= 1 && minutes <= 1440) {
+        const ms = minutes * 60000;
+        if (override.unhealthyResetMs !== ms) { override.unhealthyResetMs = ms; changed = true; }
+      } else showStatus(`Invalid reset window "${resetRaw}" (1-1440 minutes) — kept current`, "error");
     }
 
-    const statusesGlobal = settingsData.comboUnhealthyStatuses ?? [];
-    const curStatuses = override.unhealthyStatuses;
+    const statusesGlobal = Array.isArray(settingsData.comboUnhealthyStatuses) ? settingsData.comboUnhealthyStatuses : [];
+    const curStatuses = Array.isArray(override.unhealthyStatuses) ? override.unhealthyStatuses : undefined;
     const statusesLabel = curStatuses === undefined
       ? `global ${statusesGlobal.join(",") || "all"}`
       : (curStatuses.length === 0 ? "all" : curStatuses.join(","));
-    const stRaw = ((await prompt(`  Statuses csv or "all" (${statusesLabel}): `)) || "").trim();
-    if (stRaw === "-") delete override.unhealthyStatuses;
-    else if (stRaw !== "") {
+    const stRaw = ((await prompt(`  Statuses csv or "all" (codes 400-599, 4xx/5xx) (${statusesLabel}): `)) || "").trim();
+    if (stRaw === "-") {
+      if ("unhealthyStatuses" in override) { delete override.unhealthyStatuses; changed = true; }
+    } else if (stRaw !== "") {
       const parsed = parseStatusesCsv(stRaw);
       if (parsed === null) showStatus(`Invalid status list "${stRaw}" — kept current`, "error");
-      else override.unhealthyStatuses = parsed;
+      else if (JSON.stringify(parsed) !== JSON.stringify(curStatuses ?? null)) { override.unhealthyStatuses = parsed; changed = true; }
     }
 
-    if (name !== combo.name) delete comboStrategies[combo.name];
-    if (!override.fallbackStrategy || override.fallbackStrategy === "fallback") delete override.fallbackStrategy;
-    if (Object.keys(override).length === 0) delete comboStrategies[name];
-    else comboStrategies[name] = override;
-    const strategySync = await api.updateSettings({ comboStrategies });
-    if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
+    // Skip the PATCH when nothing changed: writing comboStrategies resets the
+    // server's in-memory health state for every combo.
+    if (changed || (name !== combo.name && Object.prototype.hasOwnProperty.call(comboStrategies, combo.name))) {
+      if (name !== combo.name) delete comboStrategies[combo.name];
+      if (!override.fallbackStrategy || override.fallbackStrategy === "fallback") delete override.fallbackStrategy;
+      if (Object.keys(override).length === 0) delete comboStrategies[name];
+      else comboStrategies[name] = override;
+      const strategySync = await api.updateSettings({ comboStrategies });
+      if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
+    }
   }
   
   const result = await api.updateCombo(combo.id, { name, models: finalModels });

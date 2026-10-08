@@ -125,4 +125,33 @@ describe("handleComboChat unhealthy skip", () => {
       vi.useRealTimers();
     }
   });
+
+  it("counts an attempt that throws, even when the statuses list is restricted", async () => {
+    const cfg = { threshold: 1, resetMs: 86400000, statuses: [404] };
+    const calls = [];
+    const fail = async () => handleComboChat({
+      body: { messages: [{ role: "user", content: "hi" }] },
+      models: ["p/boom", "p/live"],
+      handleSingleModel: async (b, m) => { calls.push(m); if (m === "p/boom") throw new Error("socket hang up"); return live(); },
+      log: noopLog,
+      comboName: "C",
+      comboStrategy: "fallback",
+      healthCfg: cfg,
+    });
+    await fail();
+    expect(calls).toEqual(["p/boom", "p/live"]);
+    calls.length = 0;
+    const res = await fail();
+    expect(calls).toEqual(["p/live"]); // the throwing model is skipped on the next request
+    expect(res.ok).toBe(true);
+  });
+
+  it("never counts a status outside the configured list", async () => {
+    const cfg = { threshold: 1, resetMs: 86400000, statuses: [404] };
+    const statusFor = (m) => (m === "p/503" ? overloaded() : live());
+    const first = await runStatus(["p/503", "p/live"], cfg, statusFor);
+    expect(first.calls).toEqual(["p/503", "p/live"]);
+    const second = await runStatus(["p/503", "p/live"], cfg, statusFor);
+    expect(second.calls).toEqual(["p/503", "p/live"]); // 503 is not counted under [404]
+  });
 });

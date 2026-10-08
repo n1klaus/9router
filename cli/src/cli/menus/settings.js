@@ -199,7 +199,12 @@ async function toggleHeadroom(currentlyOn) {
 async function setComboUnhealthyThreshold(current) {
   const raw = ((await prompt(`Failure threshold 1-20 (current ${current}, Enter to keep): `)) || "").trim();
   if (raw === "") { showStatus("Kept current threshold", "info"); await pause(); return; }
-  const n = Math.min(20, Math.max(1, parseInt(raw, 10) || current));
+  const n = Number(raw);
+  if (!Number.isInteger(n) || n < 1 || n > 20) {
+    showStatus(`Invalid threshold "${raw}" (1-20) — kept current`, "error");
+    await pause();
+    return;
+  }
   const result = await api.updateSettings({ comboUnhealthyThreshold: n });
   if (result.success) showStatus(`Combo unhealthy threshold set to ${n}`, "success");
   else showStatus(`Failed: ${result.error}`, "error");
@@ -214,7 +219,12 @@ async function setComboUnhealthyReset(currentMs) {
   const currentMin = Math.round(currentMs / 60000);
   const raw = ((await prompt(`Reset window minutes 1-1440 (current ${currentMin}, Enter to keep): `)) || "").trim();
   if (raw === "") { showStatus("Kept current reset window", "info"); await pause(); return; }
-  const minutes = Math.min(1440, Math.max(1, parseInt(raw, 10) || currentMin));
+  const minutes = Number(raw);
+  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+    showStatus(`Invalid reset window "${raw}" (1-1440 minutes) — kept current`, "error");
+    await pause();
+    return;
+  }
   const result = await api.updateSettings({ comboUnhealthyResetMs: minutes * 60000 });
   if (result.success) showStatus(`Combo unhealthy reset window set to ${minutes} min`, "success");
   else showStatus(`Failed: ${result.error}`, "error");
@@ -227,7 +237,7 @@ async function setComboUnhealthyReset(currentMs) {
  */
 async function setComboUnhealthyStatuses(current) {
   const label = (current || []).join(",") || "all";
-  const raw = ((await prompt(`Counted status codes csv or "all" (current ${label}, Enter to keep): `)) || "").trim();
+  const raw = ((await prompt(`Statuses csv or "all" (codes 400-599, "4xx"/"5xx") (current ${label}, Enter to keep): `)) || "").trim();
   if (raw === "") { showStatus("Kept current status list", "info"); await pause(); return; }
   const statuses = parseStatusesCsv(raw);
   if (statuses === null) {

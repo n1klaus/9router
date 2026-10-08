@@ -373,7 +373,8 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
       // Catch unexpected exceptions to ensure fallback continues
       lastError = error.message || String(error);
       if (!lastStatus) lastStatus = 500;
-      if (healthCfg) recordComboFailure(comboName, modelStr, 500, healthCfg);
+      // Count toward this combo's unhealthy counter: null = the attempt threw (no HTTP status).
+      if (healthCfg) recordComboFailure(comboName, modelStr, null, healthCfg);
       log.warn("COMBO", `Model ${modelStr} threw error, trying next`, { error: lastError });
     }
   }

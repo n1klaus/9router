@@ -1,5 +1,6 @@
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { DEFAULT_UNHEALTHY_STATUSES, isValidResetMs, isValidThreshold, normalizeStatusesList } from "@/shared/utils/unhealthyStatuses.js";
 
 const DEFAULT_MITM_ROUTER_BASE = "http://localhost:20128";
 const DEFAULT_HEADROOM_URL = process.env.HEADROOM_URL || "http://localhost:8787";
@@ -19,7 +20,7 @@ const DEFAULT_SETTINGS = {
   comboStrategies: {},
   comboUnhealthyThreshold: 3,
   comboUnhealthyResetMs: 24 * 60 * 60 * 1000,
-  comboUnhealthyStatuses: [404, 401, 402, 403],
+  comboUnhealthyStatuses: DEFAULT_UNHEALTHY_STATUSES,
   capacityAdapter: {
     vision: { enabled: true, roundRobin: false, models: [] },
     pdf: { enabled: false, roundRobin: false, models: [] },
@@ -75,13 +76,11 @@ async function readRaw() {
   return row ? parseJson(row.data, {}) : {};
 }
 
-// Stored null (not just missing) falls back to the default for unhealthy-skip keys.
-const NULL_TO_DEFAULT_KEYS = new Set(["comboUnhealthyThreshold", "comboUnhealthyResetMs", "comboUnhealthyStatuses"]);
 // Merge raw settings with defaults; backward-compat for missing keys
 export function mergeWithDefaults(raw) {
   const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) };
   for (const [key, defVal] of Object.entries(DEFAULT_SETTINGS)) {
-    if (merged[key] === undefined || (merged[key] === null && NULL_TO_DEFAULT_KEYS.has(key))) {
+    if (merged[key] === undefined) {
       if (
         key === "outboundProxyEnabled" &&
         typeof merged.outboundProxyUrl === "string" &&
@@ -93,6 +92,14 @@ export function mergeWithDefaults(raw) {
       }
     }
   }
+  // Unhealthy-skip keys: coerce stored garbage (null, "", 0, wrong types) to the
+  // defaults on read, so GET and the runtime resolver never disagree.
+  if (!isValidThreshold(merged.comboUnhealthyThreshold)) merged.comboUnhealthyThreshold = DEFAULT_SETTINGS.comboUnhealthyThreshold;
+  if (!isValidResetMs(merged.comboUnhealthyResetMs)) merged.comboUnhealthyResetMs = DEFAULT_SETTINGS.comboUnhealthyResetMs;
+  const normalizedUnhealthyStatuses = normalizeStatusesList(merged.comboUnhealthyStatuses);
+  merged.comboUnhealthyStatuses = normalizedUnhealthyStatuses === null
+    ? DEFAULT_SETTINGS.comboUnhealthyStatuses
+    : normalizedUnhealthyStatuses;
   if (merged.capacityAdapter && typeof merged.capacityAdapter === "object") {
     for (const capKey of Object.keys(merged.capacityAdapter)) {
       const entry = merged.capacityAdapter[capKey];

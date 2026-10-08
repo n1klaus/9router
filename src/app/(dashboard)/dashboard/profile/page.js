@@ -6,7 +6,7 @@ import Modal, { ConfirmModal } from "@/shared/components/Modal";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
-import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes } from "@/shared/utils/unhealthyStatuses";
+import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes, normalizeStatusesList, isValidThreshold, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX } from "@/shared/utils/unhealthyStatuses";
 import { APP_CONFIG } from "@/shared/constants/config";
 import { LOCALE_COOKIE, normalizeLocale } from "@/i18n/config";
 import { LOCALE_FLAGS } from "@/shared/constants/locales";
@@ -47,8 +47,17 @@ export default function ProfilePage() {
   const [oidcLoading, setOidcLoading] = useState(false);
   const [oidcTestLoading, setOidcTestLoading] = useState(false);
   const [oidcTestStatus, setOidcTestStatus] = useState({ type: "", message: "" });
-  const [unhealthyStatusesText, setUnhealthyStatusesText] = useState("");
-  const [comboUnhealthyStatus, setComboUnhealthyStatus] = useState(null);
+  const [statusesDraft, setStatusesDraft] = useState(null); // non-null = unparseable text being kept
+  const [unhealthyErrors, setUnhealthyErrors] = useState({}); // field -> message
+  const setUnhealthyError = (field, message) => setUnhealthyErrors((prev) => ({ ...prev, [field]: message }));
+  const settingsRef = useRef({});
+  const applySettings = (next) => { settingsRef.current = next; setSettings(next); };
+  const settingsQueue = useRef(Promise.resolve());
+  const queueSettingsWrite = (run) => {
+    const task = settingsQueue.current.then(run);
+    settingsQueue.current = task.catch(() => {}); // keep the chain alive after a failure
+    return task;
+  };
   const [oidcExpanded, setOidcExpanded] = useState(false);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -94,8 +103,7 @@ export default function ProfilePage() {
     fetch("/api/settings")
       .then((res) => res.json())
       .then((data) => {
-        setSettings(data);
-        setUnhealthyStatusesText(formatStatusCodes(data?.comboUnhealthyStatuses || []));
+        applySettings(data);
         setOidcForm({
           authMode: data?.authMode || "password",
           oidcIssuerUrl: data?.oidcIssuerUrl || "",
@@ -331,91 +339,80 @@ export default function ProfilePage() {
       console.error("Failed to update combo sticky limit:", err);
     }
   };
-  const updateComboUnhealthyThreshold = async (value) => {
-    const n = parseInt(value, 10);
-    if (!Number.isFinite(n) || n < 1 || n > 20) {
-      setComboUnhealthyStatus({ type: "error", message: "Threshold must be a number from 1 to 20." });
-      return;
-    }
+  // Optimistic save with rollback and a per-field error, serialized so two quick
+  // clicks never build from the same snapshot.
+  const saveUnhealthySetting = (patch, field, failureMessage) => queueSettingsWrite(async () => {
+    const prev = settingsRef.current;
+    applySettings({ ...prev, ...patch });
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comboUnhealthyThreshold: n }),
+        body: JSON.stringify(patch),
       });
-      if (res.ok) {
-        setSettings(prev => ({ ...prev, comboUnhealthyThreshold: n }));
-        setComboUnhealthyStatus(null);
-      } else {
-        setComboUnhealthyStatus({ type: "error", message: "Failed to save threshold." });
-      }
+      if (!res.ok) throw new Error(`Failed to save (${res.status})`);
+      setUnhealthyError(field, null);
     } catch (err) {
-      console.error("Failed to update combo unhealthy threshold:", err);
-      setComboUnhealthyStatus({ type: "error", message: "Failed to save threshold." });
+      console.error("Failed to update combo unhealthy settings:", err);
+      applySettings(prev);
+      setUnhealthyError(field, failureMessage);
     }
+  });
+
+  // Blur commits. Empty boxes are rejected with a message: the global card has no
+  // "inherit" state, only concrete values.
+  const commitUnhealthyThreshold = (text) => {
+    const n = Number((text || "").trim());
+    if (!isValidThreshold(n)) {
+      setUnhealthyError("threshold", `Threshold must be a whole number from ${UNHEALTHY_THRESHOLD_MIN} to ${UNHEALTHY_THRESHOLD_MAX}.`);
+      return;
+    }
+    if (settingsRef.current.comboUnhealthyThreshold === n) return; // no-op must not reset server health
+    setUnhealthyError("threshold", null);
+    saveUnhealthySetting({ comboUnhealthyThreshold: n }, "threshold", "Failed to save threshold.");
   };
 
-  const updateComboUnhealthyReset = async (value) => {
-    const minutes = parseInt(value, 10);
-    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
-      setComboUnhealthyStatus({ type: "error", message: "Reset window must be minutes from 1 to 1440." });
+  const commitUnhealthyReset = (text) => {
+    const minutes = Number((text || "").trim());
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+      setUnhealthyError("reset", "Reset window must be whole minutes from 1 to 1440.");
       return;
     }
     const ms = minutes * 60000;
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comboUnhealthyResetMs: ms }),
-      });
-      if (res.ok) {
-        setSettings(prev => ({ ...prev, comboUnhealthyResetMs: ms }));
-        setComboUnhealthyStatus(null);
-      } else {
-        setComboUnhealthyStatus({ type: "error", message: "Failed to save reset window." });
-      }
-    } catch (err) {
-      console.error("Failed to update combo unhealthy reset window:", err);
-      setComboUnhealthyStatus({ type: "error", message: "Failed to save reset window." });
-    }
+    if (settingsRef.current.comboUnhealthyResetMs === ms) return;
+    setUnhealthyError("reset", null);
+    saveUnhealthySetting({ comboUnhealthyResetMs: ms }, "reset", "Failed to save reset window.");
   };
 
-  const updateComboUnhealthyStatuses = async (list) => {
-    if (JSON.stringify(settings.comboUnhealthyStatuses ?? null) === JSON.stringify(list ?? null)) return; // no-op blur must not reset server health
-    try {
-      const res = await fetch("/api/settings", {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ comboUnhealthyStatuses: list }),
-      });
-      if (res.ok) {
-        setSettings(prev => ({ ...prev, comboUnhealthyStatuses: list }));
-        setUnhealthyStatusesText(formatStatusCodes(list));
-        setComboUnhealthyStatus(null);
-      } else {
-        setComboUnhealthyStatus({ type: "error", message: "Failed to save status codes." });
-      }
-    } catch (err) {
-      console.error("Failed to update combo unhealthy statuses:", err);
-      setComboUnhealthyStatus({ type: "error", message: "Failed to save status codes." });
-    }
+  const toggleUnhealthyClass = (marker, on) => {
+    const next = normalizeStatusesList(toggleStatusClass(settingsRef.current.comboUnhealthyStatuses ?? [], marker, on)) ?? [];
+    if (JSON.stringify(next) === JSON.stringify(settingsRef.current.comboUnhealthyStatuses ?? [])) return;
+    setUnhealthyError("statuses", null);
+    saveUnhealthySetting({ comboUnhealthyStatuses: next }, "statuses", "Failed to save status codes.");
   };
 
-  // Codes box of the global card: empty = "all errors"; invalid input keeps the
-  // typed text and reports the problem.
+  // Codes box: empty = "all errors"; invalid input keeps the typed text and reports it.
   const commitUnhealthyStatusesText = () => {
-    const raw = unhealthyStatusesText.trim();
-    const { classes } = splitStatusClasses(settings.comboUnhealthyStatuses);
+    const raw = (statusesDraft ?? "").trim();
+    const classes = splitStatusClasses(settingsRef.current.comboUnhealthyStatuses).classes;
     if (raw === "") {
-      updateComboUnhealthyStatuses(classes);
+      setStatusesDraft(null);
+      const next = normalizeStatusesList(classes) ?? [];
+      if (JSON.stringify(next) === JSON.stringify(settingsRef.current.comboUnhealthyStatuses ?? [])) return;
+      setUnhealthyError("statuses", null);
+      saveUnhealthySetting({ comboUnhealthyStatuses: next }, "statuses", "Failed to save status codes.");
       return;
     }
-    const typed = parseStatusesInput(raw);
-    if (typed === null) {
-      setComboUnhealthyStatus({ type: "error", message: `Invalid status list "${raw}". Use HTTP codes 100-599 or "all".` });
+    const parsed = parseStatusesInput(raw);
+    if (parsed === null) {
+      setUnhealthyError("statuses", 'Invalid status list. Use codes 400-599, "4xx"/"5xx", or "all".');
       return;
     }
-    updateComboUnhealthyStatuses(typed.length === 0 ? [] : [...classes, ...typed]);
+    setStatusesDraft(null);
+    const next = parsed.length === 0 ? [] : (normalizeStatusesList([...classes, ...parsed]) ?? []);
+    if (JSON.stringify(next) === JSON.stringify(settingsRef.current.comboUnhealthyStatuses ?? [])) return;
+    setUnhealthyError("statuses", null);
+    saveUnhealthySetting({ comboUnhealthyStatuses: next }, "statuses", "Failed to save status codes.");
   };
 
   const updateRequireLogin = async (requireLogin) => {
@@ -1624,40 +1621,50 @@ export default function ProfilePage() {
             <h3 className="text-base sm:text-lg font-semibold">Combo Unhealthy Skip</h3>
           </div>
           <div className="flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="font-medium">Failure threshold</p>
-                <p className="text-sm text-text-muted">After N consecutive failures the model is skipped automatically until the reset window is over (1–20)</p>
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Failure threshold</p>
+                  <p className="text-sm text-text-muted">After N consecutive failures the model is skipped automatically until the reset window is over (1–20)</p>
+                </div>
+                <Input
+                  key={`unhealthy-th:${settings.comboUnhealthyThreshold ?? 3}`}
+                  type="number"
+                  min={UNHEALTHY_THRESHOLD_MIN}
+                  max={UNHEALTHY_THRESHOLD_MAX}
+                  defaultValue={settings.comboUnhealthyThreshold ?? 3}
+                  onBlur={(e) => commitUnhealthyThreshold(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                  disabled={loading}
+                  className="w-20 text-center"
+                />
               </div>
-              <Input
-                type="number"
-                min="1"
-                max="20"
-                value={settings.comboUnhealthyThreshold ?? 3}
-                onChange={(e) => updateComboUnhealthyThreshold(e.target.value)}
-                disabled={loading}
-                className="w-20 text-center"
-              />
+              {unhealthyErrors.threshold && <p className="text-xs text-red-500">{unhealthyErrors.threshold}</p>}
             </div>
-            <div className="flex items-center justify-between pt-2 border-t border-border/50">
-              <div>
-                <p className="font-medium">Reset window (minutes)</p>
-                <p className="text-sm text-text-muted">Skipped models are retried after this window (1–1440, default 1440 = 24 hours)</p>
+            <div className="flex flex-col gap-1 pt-2 border-t border-border/50">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="font-medium">Reset window (minutes)</p>
+                  <p className="text-sm text-text-muted">Skipped models are retried after this window (1–1440, default 1440 = 24 hours)</p>
+                </div>
+                <Input
+                  key={`unhealthy-rs:${Math.max(1, Math.round((settings.comboUnhealthyResetMs ?? 86400000) / 60000))}`}
+                  type="number"
+                  min="1"
+                  max="1440"
+                  defaultValue={Math.max(1, Math.round((settings.comboUnhealthyResetMs ?? 86400000) / 60000))}
+                  onBlur={(e) => commitUnhealthyReset(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                  disabled={loading}
+                  className="w-20 text-center"
+                />
               </div>
-              <Input
-                type="number"
-                min="1"
-                max="1440"
-                value={Math.max(1, Math.round((settings.comboUnhealthyResetMs ?? 86400000) / 60000))}
-                onChange={(e) => updateComboUnhealthyReset(e.target.value)}
-                disabled={loading}
-                className="w-20 text-center"
-              />
+              {unhealthyErrors.reset && <p className="text-xs text-red-500">{unhealthyErrors.reset}</p>}
             </div>
             <div className="flex flex-col gap-2 pt-2 border-t border-border/50">
               <div>
                 <p className="font-medium">Counted error codes</p>
-                <p className="text-sm text-text-muted">HTTP statuses that count toward the threshold (classes, codes, or both; empty = all errors)</p>
+                <p className="text-sm text-text-muted">HTTP statuses that count toward the threshold: codes 400-599, &quot;4xx&quot;/&quot;5xx&quot; markers, or the word &quot;all&quot;; empty = every error</p>
               </div>
               <div className="flex flex-wrap items-center gap-4">
                 {["4xx", "5xx"].map((marker) => {
@@ -1668,7 +1675,7 @@ export default function ProfilePage() {
                       <input
                         type="checkbox"
                         checked={on}
-                        onChange={() => updateComboUnhealthyStatuses(toggleStatusClass(settings.comboUnhealthyStatuses ?? [], marker, !on))}
+                        onChange={() => toggleUnhealthyClass(marker, !on)}
                         disabled={loading}
                         className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
                       />
@@ -1678,19 +1685,16 @@ export default function ProfilePage() {
                 })}
               </div>
               <Input
-                value={unhealthyStatusesText}
-                onChange={(e) => setUnhealthyStatusesText(e.target.value)}
+                value={statusesDraft ?? formatStatusCodes(settings.comboUnhealthyStatuses)}
+                onChange={(e) => setStatusesDraft(e.target.value)}
                 onBlur={commitUnhealthyStatusesText}
-                placeholder="404, 401, 402, 403"
+                onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+                placeholder="401, 402, 403, 404"
                 disabled={loading}
                 className="w-full text-center"
               />
+              {unhealthyErrors.statuses && <p className="text-xs text-red-500">{unhealthyErrors.statuses}</p>}
             </div>
-            {comboUnhealthyStatus?.message && (
-              <p className={`text-xs sm:text-sm ${comboUnhealthyStatus.type === "error" ? "text-red-500" : "text-green-500"} pt-2 border-t border-border/50`}>
-                {comboUnhealthyStatus.message}
-              </p>
-            )}
           </div>
         </Card>
 

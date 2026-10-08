@@ -3,6 +3,7 @@ import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import { resetComboHealth } from "open-sse/services/comboHealth.js";
+import { validateUnhealthySettingsPatch, validateComboStrategies, normalizeStatusesList, sanitizeUnhealthyOverrides } from "@/shared/utils/unhealthyStatuses.js";
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +42,23 @@ export async function PATCH(request) {
     const body = await request.json();
 
     // Strip protected secrets before any internal handling sets them
-    for (const key of PROTECTED_SETTING_KEYS) delete body[key];
+
+    // Reject invalid unhealthy-skip values instead of persisting them. The UI and
+    // CLI clamp/validate first, so a rejection means a non-UI caller sent garbage.
+    const unhealthyError = validateUnhealthySettingsPatch(body) || validateComboStrategies(body.comboStrategies);
+    if (unhealthyError) {
+      return NextResponse.json({ error: unhealthyError }, { status: 400 });
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "comboUnhealthyStatuses")) {
+      body.comboUnhealthyStatuses = normalizeStatusesList(body.comboUnhealthyStatuses);
+    }
+    if (body.comboStrategies && typeof body.comboStrategies === "object" && !Array.isArray(body.comboStrategies)) {
+      for (const [name, entry] of Object.entries(body.comboStrategies)) {
+        if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+          body.comboStrategies[name] = sanitizeUnhealthyOverrides(entry);
+        }
+      }
+    }
 
     // If updating password, hash it
     if (body.newPassword) {
