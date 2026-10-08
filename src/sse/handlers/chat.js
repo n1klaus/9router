@@ -22,6 +22,7 @@ import { handleBypassRequest } from "open-sse/utils/bypassHandler.js";
 import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import * as log from "../utils/logger.js";
+import { resolveUnhealthyCfg } from "@/shared/utils/unhealthyStatuses.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
@@ -124,12 +125,7 @@ export async function handleChat(request, clientRawRequest = null) {
     }
 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
-    const comboSpecific = comboStrategies[modelStr] || {};
-    const healthCfg = {
-      threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
-      resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
-      statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
-    };
+    const healthCfg = resolveUnhealthyCfg(comboStrategies[modelStr] || {}, settings);
     log.info("CHAT", `Combo "${modelStr}" with ${augmentedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,
@@ -208,12 +204,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
       }
 
       const comboStickyLimit = chatSettings.comboStickyRoundRobinLimit;
-      const comboSpecific = comboStrategies[modelStr] || {};
-      const healthCfg = {
-        threshold: comboSpecific.unhealthyThreshold ?? chatSettings.comboUnhealthyThreshold,
-        resetMs: comboSpecific.unhealthyResetMs ?? chatSettings.comboUnhealthyResetMs,
-        statuses: comboSpecific.unhealthyStatuses ?? chatSettings.comboUnhealthyStatuses,
-      };
+      const healthCfg = resolveUnhealthyCfg(comboStrategies[modelStr] || {}, chatSettings);
       log.info("CHAT", `Combo "${modelStr}" with ${augmentedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
       return handleComboChat({
         body,

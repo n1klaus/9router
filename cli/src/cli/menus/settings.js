@@ -1,5 +1,6 @@
 const api = require("../api/client");
 const { confirm, pause, prompt } = require("../utils/input");
+const { parseStatusesCsv } = require("../utils/unhealthyStatuses");
 const { showStatus } = require("../utils/display");
 const { showMenuWithBack } = require("../utils/menuHelper");
 
@@ -228,9 +229,12 @@ async function setComboUnhealthyStatuses(current) {
   const label = (current || []).join(",") || "all";
   const raw = ((await prompt(`Counted status codes csv or "all" (current ${label}, Enter to keep): `)) || "").trim();
   if (raw === "") { showStatus("Kept current status list", "info"); await pause(); return; }
-  const statuses = raw.toLowerCase() === "all"
-    ? []
-    : raw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+  const statuses = parseStatusesCsv(raw);
+  if (statuses === null) {
+    showStatus(`Invalid status list "${raw}" — kept current`, "error");
+    await pause();
+    return;
+  }
   const result = await api.updateSettings({ comboUnhealthyStatuses: statuses });
   if (result.success) showStatus(`Combo unhealthy statuses set to ${statuses.join(",") || "all"}`, "success");
   else showStatus(`Failed: ${result.error}`, "error");

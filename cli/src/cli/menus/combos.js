@@ -3,6 +3,7 @@ const { prompt, confirm, pause } = require("../utils/input");
 const { clearScreen, showStatus, showHeader } = require("../utils/display");
 const { formatDate } = require("../utils/format");
 const { selectModelFromList } = require("../utils/modelSelector");
+const { parseStatusesCsv } = require("../utils/unhealthyStatuses");
 const { showMenuWithBack } = require("../utils/menuHelper");
 
 /**
@@ -86,39 +87,54 @@ async function handleEditSingleCombo(combo) {
   const finalModels = models.length > 0 ? models : combo.models;
   // Per-combo unhealthy-skip overrides live in settings.comboStrategies[name],
   // not on the combo record. Enter = keep, "-" = inherit global.
+  // Renames migrate the entry: read the old key, write the new one.
   const settingsRes = await api.getSettings();
-  const settingsData = (settingsRes.success && settingsRes.data) || {};
-  const comboStrategies = { ...(settingsData.comboStrategies || {}) };
-  const override = { ...(comboStrategies[name] || {}) };
-  console.log("\nUnhealthy skip (Enter = keep, '-' = inherit global):");
+  if (!settingsRes.success) {
+    // Never write comboStrategies from a failed read: it would drop every other combo's entry.
+    showStatus(`Failed to load settings: ${settingsRes.error} — skipped unhealthy-skip overrides`, "error");
+  } else {
+    const settingsData = settingsRes.data || {};
+    const comboStrategies = { ...(settingsData.comboStrategies || {}) };
+    const override = { ...(comboStrategies[combo.name] || {}) };
+    console.log("\nUnhealthy skip (Enter = keep, '-' = inherit global):");
 
-  const thRaw = ((await prompt(`  Threshold 1-20 (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
-  if (thRaw === "-") delete override.unhealthyThreshold;
-  else if (thRaw !== "") override.unhealthyThreshold = Math.min(20, Math.max(1, parseInt(thRaw, 10) || 1));
+    const thRaw = ((await prompt(`  Threshold 1-20 (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
+    if (thRaw === "-") delete override.unhealthyThreshold;
+    else if (thRaw !== "") {
+      const n = parseInt(thRaw, 10);
+      if (Number.isFinite(n)) override.unhealthyThreshold = Math.min(20, Math.max(1, n));
+      else showStatus(`Invalid threshold "${thRaw}" — kept current`, "error");
+    }
 
-  const resetGlobalMin = Math.round((settingsData.comboUnhealthyResetMs ?? 86400000) / 60000);
-  const resetRaw = ((await prompt(`  Reset minutes 1-1440 (global ${resetGlobalMin}): `)) || "").trim();
-  if (resetRaw === "-") delete override.unhealthyResetMs;
-  else if (resetRaw !== "") override.unhealthyResetMs = Math.min(1440, Math.max(1, parseInt(resetRaw, 10) || 1)) * 60000;
+    const resetGlobalMin = Math.round((settingsData.comboUnhealthyResetMs ?? 86400000) / 60000);
+    const resetRaw = ((await prompt(`  Reset minutes 1-1440 (global ${resetGlobalMin}): `)) || "").trim();
+    if (resetRaw === "-") delete override.unhealthyResetMs;
+    else if (resetRaw !== "") {
+      const minutes = parseInt(resetRaw, 10);
+      if (Number.isFinite(minutes)) override.unhealthyResetMs = Math.min(1440, Math.max(1, minutes)) * 60000;
+      else showStatus(`Invalid reset window "${resetRaw}" — kept current`, "error");
+    }
 
-  const statusesGlobal = settingsData.comboUnhealthyStatuses ?? [];
-  const curStatuses = override.unhealthyStatuses;
-  const statusesLabel = curStatuses === undefined
-    ? `global ${statusesGlobal.join(",") || "all"}`
-    : (curStatuses.length === 0 ? "all" : curStatuses.join(","));
-  const stRaw = ((await prompt(`  Statuses csv or "all" (${statusesLabel}): `)) || "").trim();
-  if (stRaw === "-") delete override.unhealthyStatuses;
-  else if (stRaw !== "") {
-    override.unhealthyStatuses = stRaw.toLowerCase() === "all"
-      ? []
-      : stRaw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+    const statusesGlobal = settingsData.comboUnhealthyStatuses ?? [];
+    const curStatuses = override.unhealthyStatuses;
+    const statusesLabel = curStatuses === undefined
+      ? `global ${statusesGlobal.join(",") || "all"}`
+      : (curStatuses.length === 0 ? "all" : curStatuses.join(","));
+    const stRaw = ((await prompt(`  Statuses csv or "all" (${statusesLabel}): `)) || "").trim();
+    if (stRaw === "-") delete override.unhealthyStatuses;
+    else if (stRaw !== "") {
+      const parsed = parseStatusesCsv(stRaw);
+      if (parsed === null) showStatus(`Invalid status list "${stRaw}" — kept current`, "error");
+      else override.unhealthyStatuses = parsed;
+    }
+
+    if (name !== combo.name) delete comboStrategies[combo.name];
+    if (!override.fallbackStrategy || override.fallbackStrategy === "fallback") delete override.fallbackStrategy;
+    if (Object.keys(override).length === 0) delete comboStrategies[name];
+    else comboStrategies[name] = override;
+    const strategySync = await api.updateSettings({ comboStrategies });
+    if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
   }
-
-  if (!override.fallbackStrategy || override.fallbackStrategy === "fallback") delete override.fallbackStrategy;
-  if (Object.keys(override).length === 0) delete comboStrategies[name];
-  else comboStrategies[name] = override;
-  const strategySync = await api.updateSettings({ comboStrategies });
-  if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
   
   const result = await api.updateCombo(combo.id, { name, models: finalModels });
   

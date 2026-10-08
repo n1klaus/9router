@@ -10,6 +10,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { AI_PROVIDERS } from "@/shared/constants/providers";
 import { handleComboChat } from "open-sse/services/combo.js";
 import * as log from "../utils/logger.js";
+import { resolveUnhealthyCfg } from "@/shared/utils/unhealthyStatuses.js";
 
 // Derived from providers.js: any TTS provider not noAuth requires stored credentials
 const CREDENTIALED_PROVIDERS = new Set(
@@ -50,12 +51,7 @@ export async function handleTts(request) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[modelStr]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
-    const comboSpecific = comboStrategies[modelStr] || {};
-    const healthCfg = {
-      threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
-      resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
-      statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
-    };
+    const healthCfg = resolveUnhealthyCfg(comboStrategies[modelStr] || {}, settings);
     log.info("TTS", `Combo "${modelStr}" with ${comboModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,

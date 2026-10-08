@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -60,6 +60,19 @@ export default function CombosPage() {
   const [editingCombo, setEditingCombo] = useState(null);
   const [activeProviders, setActiveProviders] = useState([]);
   const [comboStrategies, setComboStrategies] = useState({});
+  const comboStrategiesRef = useRef({});
+  const applyStrategies = (updated) => {
+    comboStrategiesRef.current = updated;
+    setComboStrategies(updated);
+  };
+  // Every comboStrategies write runs through this chain, so two cards (or a card
+  // and a bulk action) can never build from the same stale snapshot.
+  const strategyQueue = useRef(Promise.resolve());
+  const queueStrategyWrite = (build) => {
+    const run = strategyQueue.current.then(build);
+    strategyQueue.current = run.catch(() => {}); // keep the chain alive after a failure
+    return run;
+  };
   const [capacityAdapter, setCapacityAdapter] = useState(EMPTY_CAPACITY_ADAPTER);
   const { getCaps } = useModelCaps();
   const [confirmState, setConfirmState] = useState(null);
@@ -170,7 +183,7 @@ export default function CombosPage() {
       if (providersRes.ok) {
         setActiveProviders(providersData.connections || []);
       }
-      setComboStrategies(settingsData.comboStrategies || {});
+      applyStrategies(settingsData.comboStrategies || {});
       const rawAdapter = settingsData.capacityAdapter || {};
       const normalized = {};
       for (const cap of CAPACITY_ADAPTER_CAPS) {
@@ -235,19 +248,20 @@ export default function CombosPage() {
     }
   };
 
-  const pruneStrategiesForNames = (names, base = comboStrategies) => {
+  const pruneStrategiesForNames = (names, base = comboStrategiesRef.current) => {
     const updated = { ...base };
     for (const name of names) delete updated[name];
     return updated;
   };
 
   const persistComboStrategies = async (updated) => {
-    await fetch("/api/settings", {
+    const res = await fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ comboStrategies: updated }),
     });
-    setComboStrategies(updated);
+    if (!res.ok) throw new Error(`Failed to save combo settings (${res.status})`);
+    applyStrategies(updated);
   };
 
   const handleDelete = async (id) => {
@@ -261,7 +275,7 @@ export default function CombosPage() {
           const res = await fetch(`/api/combos/${id}`, { method: "DELETE" });
           if (res.ok) {
             if (combo?.name) {
-              await persistComboStrategies(pruneStrategiesForNames([combo.name]));
+              await queueStrategyWrite(async () => persistComboStrategies(pruneStrategiesForNames([combo.name])));
             }
             setCombos((prev) => prev.filter((c) => c.id !== id));
             setSelectedIds((prev) => prev.filter((x) => x !== id));
@@ -293,7 +307,7 @@ export default function CombosPage() {
             ids.map((id) => fetch(`/api/combos/${id}`, { method: "DELETE" }))
           );
           const failed = results.filter((r) => !r.ok).length;
-          await persistComboStrategies(pruneStrategiesForNames(names));
+          await queueStrategyWrite(async () => persistComboStrategies(pruneStrategiesForNames(names)));
           setCombos((prev) => prev.filter((c) => !ids.includes(c.id)));
           clearSelection();
           setConfirmState(null);
@@ -311,11 +325,13 @@ export default function CombosPage() {
 
   // Merge a per-combo strategy patch into settings.comboStrategies. null values
   // clear a key; a default "fallback" strategy is dropped; an entry with no
-  // remaining keys is removed.
-  const handleSetComboStrategy = async (comboName, patch) => {
-    try {
-      const updated = { ...comboStrategies };
-      const next = { ...(updated[comboName] || {}) };
+  // remaining keys is removed. All writes run through the serialized queue and
+  // build from the ref, never the render closure.
+  const handleSetComboStrategy = (comboName, patch) => {
+    queueStrategyWrite(async () => {
+      const updated = { ...comboStrategiesRef.current };
+      const current = updated[comboName] ?? null;
+      const next = { ...(current || {}) };
       for (const [key, value] of Object.entries(patch)) {
         if (value === null || value === undefined) delete next[key];
         else next[key] = value;
@@ -323,26 +339,29 @@ export default function CombosPage() {
       if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") delete next.fallbackStrategy;
       if (Object.keys(next).length === 0) delete updated[comboName];
       else updated[comboName] = next;
-
+      if (JSON.stringify(updated[comboName] ?? null) === JSON.stringify(current)) return; // no-op blur
       await persistComboStrategies(updated);
-    } catch (error) {
+    }).catch((error) => {
       console.log("Error updating combo strategy:", error);
-    }
+      alert("Failed to save combo settings");
+    });
   };
 
   const handleBulkSetStrategy = async (strategy) => {
     if (selectedCombos.length === 0 || !strategy) return;
     setBulkBusy(true);
     try {
-      const updated = { ...comboStrategies };
-      for (const combo of selectedCombos) {
-        const next = { ...(updated[combo.name] || {}) };
-        if (strategy && strategy !== "fallback") next.fallbackStrategy = strategy;
-        else delete next.fallbackStrategy;
-        if (Object.keys(next).length === 0) delete updated[combo.name];
-        else updated[combo.name] = next;
-      }
-      await persistComboStrategies(updated);
+      await queueStrategyWrite(async () => {
+        const updated = { ...comboStrategiesRef.current };
+        for (const combo of selectedCombos) {
+          const next = { ...(updated[combo.name] || {}) };
+          if (strategy && strategy !== "fallback") next.fallbackStrategy = strategy;
+          else delete next.fallbackStrategy;
+          if (Object.keys(next).length === 0) delete updated[combo.name];
+          else updated[combo.name] = next;
+        }
+        await persistComboStrategies(updated);
+      });
     } catch (error) {
       console.log("Error bulk updating combo strategy:", error);
       alert("Failed to update strategy for selected combos");
@@ -565,21 +584,45 @@ const fmtK = (n) => {
 
 function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
-  const [statusesNonce, setStatusesNonce] = useState(0);
   const cardClasses = splitStatusClasses(strategy.unhealthyStatuses).classes;
   const statusesDefault = formatStatusCodes(strategy.unhealthyStatuses);
-  // Uncontrolled input keyed by the persisted override: remounts with fresh
-  // defaults on save; invalid input bumps the nonce to revert to saved.
-  const statusesKey = `${JSON.stringify(strategy.unhealthyStatuses ?? null)}:${statusesNonce}`;
+  // Uncontrolled inputs keyed by the persisted override: a successful save
+  // remounts the field with the stored value; invalid input keeps the typed
+  // text and reports the problem.
   const commitStatuses = (text) => {
-    const typed = parseStatusesInput(text);
-    if (typed === null) { setStatusesNonce((n) => n + 1); return; }
-    const next = typed.length === 0
-      ? (cardClasses.length ? [...cardClasses] : null)
-      : [...cardClasses, ...typed];
-    onSetStrategy({ unhealthyStatuses: next });
+    const raw = (text || "").trim();
+    if (raw === "") {
+      // Empty box: keep class markers; with none, clear the override (inherit global).
+      onSetStrategy({ unhealthyStatuses: cardClasses.length ? [...cardClasses] : null });
+      return;
+    }
+    const typed = parseStatusesInput(raw);
+    if (typed === null) {
+      alert(`Invalid status list "${raw}". Use HTTP codes 100-599 or "all".`);
+      return;
+    }
+    // "all" is the explicit empty list (count every error), not inherit.
+    onSetStrategy({ unhealthyStatuses: typed.length === 0 ? [] : [...cardClasses, ...typed] });
   };
-  const toggleCardClass = (marker, on) => onSetStrategy({ unhealthyStatuses: toggleStatusClass(strategy.unhealthyStatuses ?? [], marker, on) });
+  const toggleCardClass = (marker, on) => {
+    const next = toggleStatusClass(strategy.unhealthyStatuses ?? [], marker, on);
+    // Unchecking the last marker returns to inherit rather than "all".
+    onSetStrategy({ unhealthyStatuses: next.length === 0 ? null : next });
+  };
+  const commitThreshold = (text) => {
+    const raw = (text || "").trim();
+    if (raw === "") { onSetStrategy({ unhealthyThreshold: null }); return; }
+    const n = parseInt(raw, 10);
+    if (!Number.isFinite(n)) { alert(`Invalid threshold "${raw}". Use a number 1-20.`); return; }
+    onSetStrategy({ unhealthyThreshold: Math.min(20, Math.max(1, n)) });
+  };
+  const commitReset = (text) => {
+    const raw = (text || "").trim();
+    if (raw === "") { onSetStrategy({ unhealthyResetMs: null }); return; }
+    const minutes = parseInt(raw, 10);
+    if (!Number.isFinite(minutes)) { alert(`Invalid reset window "${raw}". Use minutes 1-1440.`); return; }
+    onSetStrategy({ unhealthyResetMs: Math.min(1440, Math.max(1, minutes)) * 60000 });
+  };
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
@@ -707,30 +750,26 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
         <label className="flex items-center gap-1">
           threshold
           <Input
+            key={`th:${strategy.unhealthyThreshold ?? "inherit"}`}
             type="number"
             min="1"
             max="20"
             placeholder="inherit"
-            value={strategy.unhealthyThreshold ?? ""}
-            onChange={(e) => {
-              const raw = e.target.value;
-              onSetStrategy({ unhealthyThreshold: raw === "" ? null : Math.min(20, Math.max(1, parseInt(raw, 10) || 1)) });
-            }}
+            defaultValue={strategy.unhealthyThreshold ?? ""}
+            onBlur={(e) => commitThreshold(e.target.value)}
             className="w-16 text-center"
           />
         </label>
         <label className="flex items-center gap-1">
           reset min
           <Input
+            key={`rs:${strategy.unhealthyResetMs ?? "inherit"}`}
             type="number"
             min="1"
             max="1440"
             placeholder="inherit"
-            value={strategy.unhealthyResetMs != null ? Math.round(strategy.unhealthyResetMs / 60000) : ""}
-            onChange={(e) => {
-              const raw = e.target.value;
-              onSetStrategy({ unhealthyResetMs: raw === "" ? null : Math.min(1440, Math.max(1, parseInt(raw, 10) || 1)) * 60000 });
-            }}
+            defaultValue={strategy.unhealthyResetMs != null ? Math.round(strategy.unhealthyResetMs / 60000) : ""}
+            onBlur={(e) => commitReset(e.target.value)}
             className="w-16 text-center"
           />
         </label>
@@ -748,11 +787,10 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             </label>
           ))}
           <Input
-            key={statusesKey}
-            placeholder="inherit"
+            key={`st:${JSON.stringify(strategy.unhealthyStatuses ?? null)}`}
+            placeholder={strategy.unhealthyStatuses === undefined ? "inherit" : "all"}
             defaultValue={statusesDefault}
             onBlur={(e) => commitStatuses(e.target.value)}
-            disabled={cardClasses.length > 0}
             className="w-28 text-center"
           />
         </label>

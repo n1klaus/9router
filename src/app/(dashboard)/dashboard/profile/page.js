@@ -48,6 +48,7 @@ export default function ProfilePage() {
   const [oidcTestLoading, setOidcTestLoading] = useState(false);
   const [oidcTestStatus, setOidcTestStatus] = useState({ type: "", message: "" });
   const [unhealthyStatusesText, setUnhealthyStatusesText] = useState("");
+  const [comboUnhealthyStatus, setComboUnhealthyStatus] = useState(null);
   const [oidcExpanded, setOidcExpanded] = useState(false);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -94,7 +95,7 @@ export default function ProfilePage() {
       .then((res) => res.json())
       .then((data) => {
         setSettings(data);
-        setUnhealthyStatusesText((data?.comboUnhealthyStatuses || []).join(", "));
+        setUnhealthyStatusesText(formatStatusCodes(data?.comboUnhealthyStatuses || []));
         setOidcForm({
           authMode: data?.authMode || "password",
           oidcIssuerUrl: data?.oidcIssuerUrl || "",
@@ -332,22 +333,34 @@ export default function ProfilePage() {
   };
   const updateComboUnhealthyThreshold = async (value) => {
     const n = parseInt(value, 10);
-    if (isNaN(n) || n < 1 || n > 20) return;
+    if (!Number.isFinite(n) || n < 1 || n > 20) {
+      setComboUnhealthyStatus({ type: "error", message: "Threshold must be a number from 1 to 20." });
+      return;
+    }
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ comboUnhealthyThreshold: n }),
       });
-      if (res.ok) setSettings(prev => ({ ...prev, comboUnhealthyThreshold: n }));
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, comboUnhealthyThreshold: n }));
+        setComboUnhealthyStatus(null);
+      } else {
+        setComboUnhealthyStatus({ type: "error", message: "Failed to save threshold." });
+      }
     } catch (err) {
       console.error("Failed to update combo unhealthy threshold:", err);
+      setComboUnhealthyStatus({ type: "error", message: "Failed to save threshold." });
     }
   };
 
   const updateComboUnhealthyReset = async (value) => {
     const minutes = parseInt(value, 10);
-    if (isNaN(minutes) || minutes < 1 || minutes > 1440) return;
+    if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
+      setComboUnhealthyStatus({ type: "error", message: "Reset window must be minutes from 1 to 1440." });
+      return;
+    }
     const ms = minutes * 60000;
     try {
       const res = await fetch("/api/settings", {
@@ -355,13 +368,20 @@ export default function ProfilePage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ comboUnhealthyResetMs: ms }),
       });
-      if (res.ok) setSettings(prev => ({ ...prev, comboUnhealthyResetMs: ms }));
+      if (res.ok) {
+        setSettings(prev => ({ ...prev, comboUnhealthyResetMs: ms }));
+        setComboUnhealthyStatus(null);
+      } else {
+        setComboUnhealthyStatus({ type: "error", message: "Failed to save reset window." });
+      }
     } catch (err) {
       console.error("Failed to update combo unhealthy reset window:", err);
+      setComboUnhealthyStatus({ type: "error", message: "Failed to save reset window." });
     }
   };
 
   const updateComboUnhealthyStatuses = async (list) => {
+    if (JSON.stringify(settings.comboUnhealthyStatuses ?? null) === JSON.stringify(list ?? null)) return; // no-op blur must not reset server health
     try {
       const res = await fetch("/api/settings", {
         method: "PATCH",
@@ -371,10 +391,31 @@ export default function ProfilePage() {
       if (res.ok) {
         setSettings(prev => ({ ...prev, comboUnhealthyStatuses: list }));
         setUnhealthyStatusesText(formatStatusCodes(list));
+        setComboUnhealthyStatus(null);
+      } else {
+        setComboUnhealthyStatus({ type: "error", message: "Failed to save status codes." });
       }
     } catch (err) {
       console.error("Failed to update combo unhealthy statuses:", err);
+      setComboUnhealthyStatus({ type: "error", message: "Failed to save status codes." });
     }
+  };
+
+  // Codes box of the global card: empty = "all errors"; invalid input keeps the
+  // typed text and reports the problem.
+  const commitUnhealthyStatusesText = () => {
+    const raw = unhealthyStatusesText.trim();
+    const { classes } = splitStatusClasses(settings.comboUnhealthyStatuses);
+    if (raw === "") {
+      updateComboUnhealthyStatuses(classes);
+      return;
+    }
+    const typed = parseStatusesInput(raw);
+    if (typed === null) {
+      setComboUnhealthyStatus({ type: "error", message: `Invalid status list "${raw}". Use HTTP codes 100-599 or "all".` });
+      return;
+    }
+    updateComboUnhealthyStatuses(typed.length === 0 ? [] : [...classes, ...typed]);
   };
 
   const updateRequireLogin = async (requireLogin) => {
@@ -1627,19 +1668,7 @@ export default function ProfilePage() {
                       <input
                         type="checkbox"
                         checked={on}
-                        onChange={() => {
-                          // Last writer wins: a class toggle raced with typing is
-                          // authoritative; typed text stays as explicit codes only.
-                          const committed = splitStatusClasses(settings.comboUnhealthyStatuses);
-                          const typed = parseStatusesInput(unhealthyStatusesText) ?? [];
-                          const next = toggleStatusClass(settings.comboUnhealthyStatuses, marker, !on);
-                          if (!on) {
-                            setUnhealthyStatusesText(formatStatusCodes(typed));
-                          } else {
-                            setUnhealthyStatusesText(formatStatusCodes([...committed.codes, ...typed]));
-                          }
-                          updateComboUnhealthyStatuses(next);
-                        }}
+                        onChange={() => updateComboUnhealthyStatuses(toggleStatusClass(settings.comboUnhealthyStatuses ?? [], marker, !on))}
                         disabled={loading}
                         className="h-4 w-4 rounded border-gray-300 text-primary focus:ring-primary"
                       />
@@ -1651,20 +1680,17 @@ export default function ProfilePage() {
               <Input
                 value={unhealthyStatusesText}
                 onChange={(e) => setUnhealthyStatusesText(e.target.value)}
-                onBlur={() => {
-                  const typed = parseStatusesInput(unhealthyStatusesText);
-                  if (typed === null) {
-                    setUnhealthyStatusesText(formatStatusCodes(settings.comboUnhealthyStatuses));
-                    return;
-                  }
-                  const { classes } = splitStatusClasses(settings.comboUnhealthyStatuses);
-                  updateComboUnhealthyStatuses([...classes, ...typed]);
-                }}
+                onBlur={commitUnhealthyStatusesText}
                 placeholder="404, 401, 402, 403"
-                disabled={loading || splitStatusClasses(settings.comboUnhealthyStatuses).classes.length > 0}
+                disabled={loading}
                 className="w-full text-center"
               />
             </div>
+            {comboUnhealthyStatus?.message && (
+              <p className={`text-xs sm:text-sm ${comboUnhealthyStatus.type === "error" ? "text-red-500" : "text-green-500"} pt-2 border-t border-border/50`}>
+                {comboUnhealthyStatus.message}
+              </p>
+            )}
           </div>
         </Card>
 

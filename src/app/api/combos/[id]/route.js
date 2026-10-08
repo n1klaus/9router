@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getComboById, updateCombo, deleteCombo, getComboByName } from "@/lib/localDb";
+import { getComboById, updateCombo, deleteCombo, getComboByName, getSettings, updateSettings } from "@/lib/localDb";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import { resetComboHealth } from "open-sse/services/comboHealth.js";
 
@@ -55,6 +55,16 @@ export async function PUT(request, { params }) {
     if (combo.name && combo.name !== prev?.name) resetComboRotation(combo.name);
     if (prev?.name) resetComboHealth(prev.name);
     if (combo.name && combo.name !== prev?.name) resetComboHealth(combo.name);
+    // Keep per-combo strategy overrides attached across renames.
+    if (prev?.name && combo.name && combo.name !== prev.name) {
+      const settings = await getSettings();
+      const comboStrategies = { ...(settings.comboStrategies || {}) };
+      if (Object.prototype.hasOwnProperty.call(comboStrategies, prev.name)) {
+        if (comboStrategies[combo.name] === undefined) comboStrategies[combo.name] = comboStrategies[prev.name];
+        delete comboStrategies[prev.name];
+        await updateSettings({ comboStrategies });
+      }
+    }
 
     return NextResponse.json(combo);
   } catch (error) {

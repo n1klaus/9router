@@ -75,11 +75,13 @@ async function readRaw() {
   return row ? parseJson(row.data, {}) : {};
 }
 
+// Stored null (not just missing) falls back to the default for unhealthy-skip keys.
+const NULL_TO_DEFAULT_KEYS = new Set(["comboUnhealthyThreshold", "comboUnhealthyResetMs", "comboUnhealthyStatuses"]);
 // Merge raw settings with defaults; backward-compat for missing keys
 export function mergeWithDefaults(raw) {
   const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) };
   for (const [key, defVal] of Object.entries(DEFAULT_SETTINGS)) {
-    if (merged[key] === undefined) {
+    if (merged[key] === undefined || (merged[key] === null && NULL_TO_DEFAULT_KEYS.has(key))) {
       if (
         key === "outboundProxyEnabled" &&
         typeof merged.outboundProxyUrl === "string" &&

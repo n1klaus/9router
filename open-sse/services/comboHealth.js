@@ -58,15 +58,13 @@ export function getSkippedModels(comboName, models, cfg = {}) {
   const m = comboMap(comboName);
   if (!m) return [];
   const now = Date.now();
-  return (models || []).filter((s) => {
-    const e = m.get(s);
-    if (!e) return false;
-    if (e.skippedUntil && e.skippedUntil > now) return true;
-    // Lazy cleanup: expired skip windows and stale sub-threshold streaks.
-    if (e.skippedUntil && e.skippedUntil <= now) { m.delete(s); return false; }
-    if (now - e.firstFailureAt > c.resetMs) { m.delete(s); return false; }
-    return false;
-  });
+  const skipped = [];
+  for (const [model, e] of m) {
+    if (e.skippedUntil && e.skippedUntil > now) skipped.push(model);
+    else if (e.skippedUntil) m.delete(model);                      // expired skip window
+    else if (now - e.firstFailureAt > c.resetMs) m.delete(model);  // stale sub-threshold streak
+  }
+  return (models || []).filter((s) => skipped.includes(s));
 }
 
 export function resetComboHealth(comboName) {

@@ -57,3 +57,15 @@ export function formatStatusList(statuses) {
 export function formatStatusCodes(statuses) {
   return splitStatusClasses(statuses).codes.join(", ");
 }
+
+/**
+ * Per-combo unhealthy-skip overrides resolved against global settings.
+ * `??` (not `||`) so an explicit `[]` statuses list wins over the global list.
+ */
+export function resolveUnhealthyCfg(comboSpecific = {}, settings = {}) {
+  return {
+    threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
+    resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
+    statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
+  };
+}

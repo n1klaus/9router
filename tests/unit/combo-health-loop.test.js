@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { handleComboChat, resetComboRotation } from "../../open-sse/services/combo.js";
 import { recordComboFailure, resetComboHealth } from "../../open-sse/services/comboHealth.js";
 
@@ -7,6 +7,22 @@ const noopLog = { info() {}, warn() {}, debug() {}, error() {} };
 // Real Response objects, mirroring tests/unit/commandcode-executor.test.js.
 const dead = () => new Response(JSON.stringify({ error: { message: "model not found" } }), { status: 404, headers: { "Content-Type": "application/json" } });
 const live = () => new Response(JSON.stringify({ id: "chatcmpl-test", choices: [{ message: { role: "assistant", content: "ok" } }] }), { status: 200, headers: { "Content-Type": "application/json" } });
+const overloaded = () => new Response(JSON.stringify({ error: { message: "service overloaded" } }), { status: 503, headers: { "Content-Type": "application/json" } });
+const badRequest = () => new Response(JSON.stringify({ error: { message: "invalid request" } }), { status: 400, headers: { "Content-Type": "application/json" } });
+
+async function runStatus(models, cfg, statusFor) {
+  const calls = [];
+  const res = await handleComboChat({
+    body: { messages: [{ role: "user", content: "hi" }] },
+    models,
+    handleSingleModel: async (b, m) => { calls.push(m); return statusFor(m); },
+    log: noopLog,
+    comboName: "C",
+    comboStrategy: "fallback",
+    healthCfg: cfg,
+  });
+  return { calls, res };
+}
 
 async function run(models, cfg = CFG) {
   const calls = [];
@@ -63,5 +79,50 @@ describe("handleComboChat unhealthy skip", () => {
     });
     expect(calls).toEqual(["p/dead", "p/live"]);
     expect(res.ok).toBe(true);
+  });
+
+  it("never counts non-fallbackable errors", async () => {
+    const cfg = { threshold: 1, resetMs: 86400000, statuses: [] };
+    const statusFor = (m) => (m === "p/bad" ? badRequest() : live());
+    const first = await runStatus(["p/bad", "p/live"], cfg, statusFor);
+    expect(first.calls).toEqual(["p/bad"]); // 400 returns immediately, no fallback
+    expect(first.res.status).toBe(400);
+    const second = await runStatus(["p/bad", "p/live"], cfg, statusFor);
+    expect(second.calls).toEqual(["p/bad"]); // still attempted: 400 was never counted
+  });
+
+  it("counts a transient 503 toward the skip threshold", async () => {
+    const cfg = { threshold: 1, resetMs: 86400000, statuses: [] };
+    const statusFor = (m) => (m === "p/503" ? overloaded() : live());
+    const first = await runStatus(["p/503", "p/live"], cfg, statusFor);
+    expect(first.calls).toEqual(["p/503", "p/live"]);
+    const second = await runStatus(["p/503", "p/live"], cfg, statusFor);
+    expect(second.calls).toEqual(["p/live"]); // 503 counted once → skipped (threshold 1)
+    expect(second.res.ok).toBe(true);
+  });
+
+  it("waits out the transient cooldown before falling through", async () => {
+    vi.useFakeTimers();
+    try {
+      const calls = [];
+      const promise = handleComboChat({
+        body: { messages: [{ role: "user", content: "hi" }] },
+        models: ["p/over", "p/live"],
+        handleSingleModel: async (b, m) => { calls.push(m); return m === "p/over" ? overloaded() : live(); },
+        log: noopLog,
+        comboName: "C",
+        comboStrategy: "fallback",
+        healthCfg: { threshold: 1, resetMs: 86400000, statuses: [] },
+      });
+      let settled = false;
+      const tracked = promise.then((res) => { settled = true; return res; }, (err) => { settled = true; throw err; });
+      // Bounded pump: "overloaded" hits the backoff text rule → 2000 ms cooldown sleep.
+      for (let i = 0; i < 50 && !settled; i++) await vi.advanceTimersByTimeAsync(500);
+      const res = await tracked;
+      expect(calls).toEqual(["p/over", "p/live"]);
+      expect(res.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
