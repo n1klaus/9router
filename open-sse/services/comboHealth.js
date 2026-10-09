@@ -1,4 +1,4 @@
-import { DEFAULT_UNHEALTHY_STATUSES, matchesStatusClasses } from "../../src/shared/utils/unhealthyStatuses.js";
+import { DEFAULT_UNHEALTHY_STATUSES, matchesStatusClasses, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX, UNHEALTHY_RESET_MS_MIN, UNHEALTHY_RESET_MS_MAX } from "../../src/shared/utils/unhealthyStatuses.js";
 
 /**
  * Combo unhealthy-model skip: sticky in-memory failure memory per combo/model.
@@ -22,12 +22,18 @@ function normalizeStatuses(raw) {
   return sanitized.length ? sanitized : DEFAULT_UNHEALTHY_STATUSES;
 }
 
+// Runtime bounds mirror the validator: floor positive numbers, then clamp into
+// the valid range; non-finite/non-positive values fall back to the default.
+function clampInt(value, min, max, fallback) {
+  const n = Math.floor(+value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
+
 function normalizeCfg(cfg = {}) {
-  const threshold = Math.floor(+cfg.threshold);
-  const resetMs = +cfg.resetMs;
   return {
-    threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 3,
-    resetMs: Number.isFinite(resetMs) && resetMs > 0 ? resetMs : 24 * 60 * 60 * 1000,
+    threshold: clampInt(cfg.threshold, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX, 3),
+    resetMs: clampInt(cfg.resetMs, UNHEALTHY_RESET_MS_MIN, UNHEALTHY_RESET_MS_MAX, 24 * 60 * 60 * 1000),
     statuses: normalizeStatuses(cfg.statuses),
   };
 }

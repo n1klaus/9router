@@ -434,6 +434,18 @@ export default function ProfilePage() {
     saveUnhealthySetting({ comboUnhealthyStatuses: next }, "statuses", "Failed to save status codes.");
   };
 
+  const toggleUnhealthySkipEnabled = () => {
+    // Missing key = default on, so an unset value flips to off.
+    const next = settingsRef.current.comboUnhealthySkipEnabled === false;
+    setUnhealthyError("enabled", null);
+    saveUnhealthySetting({ comboUnhealthySkipEnabled: next }, "enabled", "Failed to save automatic skipping.");
+  };
+
+  // Saved list (codes + markers) empty = count every error; drives the codes-box
+  // placeholder so an empty box never reads as "using the defaults".
+  const { classes: unhealthyClasses, codes: unhealthyCodes } = splitStatusClasses(settings.comboUnhealthyStatuses);
+  const unhealthyStatusesEmpty = unhealthyClasses.length === 0 && unhealthyCodes.length === 0;
+
   const updateRequireLogin = async (requireLogin) => {
     try {
       const res = await fetch("/api/settings", {
@@ -1640,7 +1652,21 @@ export default function ProfilePage() {
             <h3 className="text-base sm:text-lg font-semibold">Combo Unhealthy Skip</h3>
           </div>
           <div className="flex flex-col gap-4">
-            <div className="flex flex-col gap-1">
+            <div className="flex items-start sm:items-center justify-between gap-4">
+              <div className="flex-1 min-w-0">
+                <p className="font-medium">Skip unhealthy models</p>
+                <p className="text-sm text-text-muted">
+                  When ON, models hitting the failure threshold are skipped until the reset window is over. When OFF, every request is tried.
+                </p>
+              </div>
+              <Toggle
+                checked={settings.comboUnhealthySkipEnabled !== false}
+                onChange={toggleUnhealthySkipEnabled}
+                disabled={loading}
+              />
+            </div>
+            {unhealthyErrors.enabled && <p className="text-xs text-red-500">{unhealthyErrors.enabled}</p>}
+            <div className="flex flex-col gap-1 pt-2 border-t border-border/50">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium">Failure threshold</p>
@@ -1708,7 +1734,7 @@ export default function ProfilePage() {
                 onChange={(e) => setStatusesDraft(e.target.value)}
                 onBlur={commitUnhealthyStatusesText}
                 onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                placeholder="401, 402, 403, 404"
+                placeholder={unhealthyStatusesEmpty ? "empty = all error statuses" : "401, 402, 403, 404"}
                 disabled={loading}
                 className="w-full text-center"
               />

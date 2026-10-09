@@ -540,8 +540,11 @@ Dashboard → Profile → Combo Unhealthy Skip:
   Counted error codes: 401, 402, 403, 404 (empty = all errors)
 ```
 
-These are the defaults. The statuses field accepts HTTP codes 400-599, class
-markers (`4xx`, `5xx`) and the word `all` (count every error).
+These are the defaults. Skipping is on by default; set the boolean setting
+`comboUnhealthySkipEnabled` to `false` to turn the whole feature off
+server-side (default `true`). The statuses field accepts HTTP codes
+400-599, class markers (`4xx`, `5xx`) and the word `all` (count every
+error).
 
 **What counts as a failure**: a fallbackable attempt whose HTTP status is in
 the counted-error list. An empty list means every fallbackable error counts.
@@ -561,6 +564,11 @@ after which the model is probed again. If *every* model is currently
 skipped, the combo tries them all anyway — health state never hard-fails a
 request, it only reorders attempts.
 
+**Reset window input**: the dashboard takes whole minutes (1-1440). The CLI
+also accepts decimal minutes (e.g. `1.5` = 90 s) and rounds to milliseconds
+before saving — a known divergence between the two UIs; both store the value
+as whole milliseconds.
+
 **Per-combo overrides**: on the Combos page each card has an "Unhealthy skip"
 row writing `{ unhealthyThreshold, unhealthyResetMs, unhealthyStatuses }`
 into that combo's strategy entry. Empty fields inherit the global values;
@@ -577,9 +585,10 @@ state, so a multi-process deployment does not share it. Account-level
 per-model locks (failures that trigger provider backoff) are stored
 separately and survive restarts.
 
-**CLI**: `Settings` menu → the three "Combo unhealthy" items for the globals;
-`Combos` → a combo → `Edit Combo` for per-combo overrides (Enter = keep,
-`-` = inherit global, `all` = every error). Statuses accept codes,
+**CLI**: `Settings` menu → the "Combo unhealthy skip" toggle (shows ON/OFF and
+flips `comboUnhealthySkipEnabled`) plus the three "Combo unhealthy" items for
+the globals; `Combos` → a combo → `Edit Combo` for per-combo overrides (Enter
+= keep, `-` = inherit global, `all` = every error). Statuses accept codes,
 4xx/5xx markers, or `all`; invalid values are rejected and the stored list kept.
 
 ---

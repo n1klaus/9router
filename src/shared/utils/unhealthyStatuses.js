@@ -29,12 +29,16 @@ export function normalizeStatusesList(value) {
   const markers = [];
   const codes = [];
   for (const item of value) {
-    if (UNHEALTHY_CLASS_MARKERS.includes(item)) {
-      if (!markers.includes(item)) markers.push(item);
+    // Marker tokens are case-insensitive: canonicalize "4XX"/"5XX" to lowercase
+    // before validation. Everything else must already be an integer code, so
+    // numeric strings like "404" still reject.
+    const token = typeof item === "string" ? item.toLowerCase() : item;
+    if (UNHEALTHY_CLASS_MARKERS.includes(token)) {
+      if (!markers.includes(token)) markers.push(token);
       continue;
     }
-    if (!Number.isInteger(item) || item < 400 || item >= 600) return null;
-    if (!codes.includes(item)) codes.push(item);
+    if (!Number.isInteger(token) || token < 400 || token >= 600) return null;
+    if (!codes.includes(token)) codes.push(token);
   }
   markers.sort();
   codes.sort((a, b) => a - b);
@@ -113,12 +117,18 @@ export function formatStatusCodes(statuses) {
 /**
  * Per-combo unhealthy-skip overrides resolved against global settings.
  * `??` (not `||`) so an explicit `[]` statuses list wins over the global list.
+ * Returns null when `comboUnhealthySkipEnabled === false`; callers pass the
+ * result as handleComboChat's healthCfg, where null disables skipping.
+ * Both params tolerate null (default params only cover undefined).
  */
 export function resolveUnhealthyCfg(comboSpecific = {}, settings = {}) {
+  const combo = comboSpecific || {};
+  const cfg = settings || {};
+  if (cfg.comboUnhealthySkipEnabled === false) return null;
   return {
-    threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
-    resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
-    statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
+    threshold: combo.unhealthyThreshold ?? cfg.comboUnhealthyThreshold,
+    resetMs: combo.unhealthyResetMs ?? cfg.comboUnhealthyResetMs,
+    statuses: combo.unhealthyStatuses ?? cfg.comboUnhealthyStatuses,
   };
 }
 
@@ -149,6 +159,9 @@ export function validateUnhealthySettingsPatch(body) {
   }
   if (Object.prototype.hasOwnProperty.call(body, "comboUnhealthyStatuses") && normalizeStatusesList(body.comboUnhealthyStatuses) === null) {
     return 'comboUnhealthyStatuses must be an array of HTTP codes 400-599 and/or "4xx"/"5xx" markers';
+  }
+  if (Object.prototype.hasOwnProperty.call(body, "comboUnhealthySkipEnabled") && typeof body.comboUnhealthySkipEnabled !== "boolean") {
+    return "comboUnhealthySkipEnabled must be a boolean";
   }
   return null;
 }

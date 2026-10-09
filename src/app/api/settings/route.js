@@ -41,6 +41,12 @@ export async function PATCH(request) {
   try {
     const body = await request.json();
 
+    // Body must be a plain object: null would crash hasOwnProperty (500) and an
+    // array would spread numeric indices into updateSettings.
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ error: "Request body must be a JSON object" }, { status: 400 });
+    }
+
     // Strip protected secrets before any internal handling sets them
     for (const key of PROTECTED_SETTING_KEYS) delete body[key];
 
@@ -53,7 +59,11 @@ export async function PATCH(request) {
     if (Object.prototype.hasOwnProperty.call(body, "comboUnhealthyStatuses")) {
       body.comboUnhealthyStatuses = normalizeStatusesList(body.comboUnhealthyStatuses);
     }
-    if (body.comboStrategies && typeof body.comboStrategies === "object" && !Array.isArray(body.comboStrategies)) {
+    if (body.comboStrategies === null) {
+      // null passes validation (treated as "unset") but must never be persisted:
+      // combo.js reads comboStrategies[comboName] and would throw on null.
+      delete body.comboStrategies;
+    } else if (body.comboStrategies && typeof body.comboStrategies === "object" && !Array.isArray(body.comboStrategies)) {
       for (const [name, entry] of Object.entries(body.comboStrategies)) {
         if (entry && typeof entry === "object" && !Array.isArray(entry)) {
           body.comboStrategies[name] = sanitizeUnhealthyOverrides(entry);
@@ -114,8 +124,11 @@ export async function PATCH(request) {
     ) {
       resetComboRotation();
     }
-    // Invalidate health state when unhealthy-skip settings change
+    // Invalidate health state when unhealthy-skip settings change.
+    // comboUnhealthySkipEnabled matters here: disabling the flag must clear
+    // stale skips so a later re-enable starts clean.
     if (
+      Object.prototype.hasOwnProperty.call(body, "comboUnhealthySkipEnabled") ||
       Object.prototype.hasOwnProperty.call(body, "comboUnhealthyThreshold") ||
       Object.prototype.hasOwnProperty.call(body, "comboUnhealthyResetMs") ||
       Object.prototype.hasOwnProperty.call(body, "comboUnhealthyStatuses") ||

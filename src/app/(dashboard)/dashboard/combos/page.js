@@ -72,8 +72,17 @@ export default function CombosPage() {
   // Serialize strategy writes so concurrent save/delete/bulk ops cannot interleave
   // PATCHes built from different ref snapshots.
   const strategyQueue = useRef(Promise.resolve());
+  // Write activity markers: fetchData must not apply a settings snapshot that
+  // was taken while a queued/optimistic strategy write was in flight, or it
+  // would clobber the edit.
+  const strategyWriteSeq = useRef(0);
+  const strategyPendingWrites = useRef(0);
   const queueStrategyWrite = (run) => {
-    const task = strategyQueue.current.then(run);
+    strategyWriteSeq.current += 1;
+    strategyPendingWrites.current += 1;
+    const task = strategyQueue.current.then(run).finally(() => {
+      strategyPendingWrites.current -= 1;
+    });
     strategyQueue.current = task.catch(() => {}); // keep the chain alive after a failure
     return task;
   };
@@ -172,6 +181,9 @@ export default function CombosPage() {
   };
 
   const fetchData = async () => {
+    // Snapshot write activity before issuing the GETs; see guard below.
+    const strategyWritesAtStart = strategyWriteSeq.current;
+    const strategyPendingAtStart = strategyPendingWrites.current;
     try {
       const [combosRes, providersRes, settingsRes] = await Promise.all([
         fetch("/api/combos"),
@@ -187,7 +199,12 @@ export default function CombosPage() {
       if (providersRes.ok) {
         setActiveProviders(providersData.connections || []);
       }
-      applyStrategies(settingsData.comboStrategies || {});
+      // Apply the fetched strategies only when no strategy write overlapped
+      // this fetch — otherwise the (possibly stale) snapshot would clobber a
+      // queued or optimistic edit. The write itself applies its own state.
+      if (strategyPendingAtStart === 0 && strategyWriteSeq.current === strategyWritesAtStart) {
+        applyStrategies(settingsData.comboStrategies || {});
+      }
       const rawAdapter = settingsData.capacityAdapter || {};
       const normalized = {};
       for (const cap of CAPACITY_ADAPTER_CAPS) {
@@ -311,17 +328,35 @@ export default function CombosPage() {
         setConfirmState((prev) => prev ? { ...prev, loading: true } : null);
         setBulkBusy(true);
         try {
-          const ids = selectedCombos.map((c) => c.id);
-          const names = selectedCombos.map((c) => c.name);
+          const targets = selectedCombos.map((c) => ({ id: c.id, name: c.name }));
           const results = await Promise.all(
-            ids.map((id) => fetch(`/api/combos/${id}`, { method: "DELETE" }))
+            targets.map(async ({ id }) => {
+              try {
+                const res = await fetch(`/api/combos/${id}`, { method: "DELETE" });
+                return res.ok;
+              } catch (error) {
+                console.log(`Error deleting combo ${id}:`, error);
+                return false;
+              }
+            })
           );
-          const failed = results.filter((r) => !r.ok).length;
-          await queueStrategyWrite(async () => persistAndApply(pruneStrategiesForNames(names)));
-          setCombos((prev) => prev.filter((c) => !ids.includes(c.id)));
-          clearSelection();
+          const deleted = targets.filter((_, i) => results[i]);
+          const failedNames = targets.filter((_, i) => !results[i]).map((c) => c.name);
+
+          // Only successful deletes may leave the UI or lose their strategy overrides.
+          if (deleted.length > 0) {
+            const deletedIds = new Set(deleted.map((c) => c.id));
+            setCombos((prev) => prev.filter((c) => !deletedIds.has(c.id)));
+            setSelectedIds((prev) => prev.filter((x) => !deletedIds.has(x)));
+            try {
+              await queueStrategyWrite(async () => persistAndApply(pruneStrategiesForNames(deleted.map((c) => c.name))));
+            } catch (error) {
+              console.log("Error pruning combo strategies:", error);
+              alert("Combos deleted, but pruning their strategy overrides failed.");
+            }
+          }
           setConfirmState(null);
-          if (failed > 0) alert(`Deleted with ${failed} failure${failed === 1 ? "" : "s"}.`);
+          if (failedNames.length > 0) alert(`Failed to delete: ${failedNames.join(", ")}`);
         } catch (error) {
           console.log("Error bulk deleting combos:", error);
           alert("Failed to delete selected combos");
@@ -635,6 +670,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
     const raw = (text || "").trim();
     setCardError(null);
     if (raw === "") { onSetStrategy({ unhealthyThreshold: null }); return; }
+    if (!/^\d+$/.test(raw)) { setCardError(`Invalid threshold. Use a whole number ${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX}, or leave empty to inherit.`); return; }
     const n = Number(raw);
     if (!isValidThreshold(n)) { setCardError(`Invalid threshold. Use a whole number ${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX}, or leave empty to inherit.`); return; }
     onSetStrategy({ unhealthyThreshold: n });
@@ -643,10 +679,16 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
     const raw = (text || "").trim();
     setCardError(null);
     if (raw === "") { onSetStrategy({ unhealthyResetMs: null }); return; }
+    if (!/^\d+$/.test(raw)) { setCardError("Invalid reset window. Use whole minutes 1-1440, or leave empty to inherit."); return; }
     const minutes = Number(raw);
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) { setCardError("Invalid reset window. Use whole minutes 1-1440, or leave empty to inherit."); return; }
     onSetStrategy({ unhealthyResetMs: minutes * 60000 });
   };
+  // Exact minutes (one decimal when needed): 90000ms renders "1.5", never
+  // Math.round(1.5) = "2", and a plain blur must not rewrite the value.
+  const resetDisplay = strategy.unhealthyResetMs == null
+    ? ""
+    : String(Math.round((strategy.unhealthyResetMs / 60000) * 10) / 10);
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
@@ -794,8 +836,12 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             min="1"
             max="1440"
             placeholder="inherit"
-            defaultValue={strategy.unhealthyResetMs != null ? Math.round(strategy.unhealthyResetMs / 60000) : ""}
-            onBlur={(e) => commitReset(e.target.value)}
+            defaultValue={resetDisplay}
+            onBlur={(e) => {
+              const text = (e.target.value || "").trim();
+              if (text === resetDisplay) return; // untouched on blur — never rewrite the value
+              commitReset(text);
+            }}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             title="Empty = inherit the global reset window"
             className="w-16 text-center"

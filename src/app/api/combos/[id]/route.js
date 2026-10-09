@@ -69,7 +69,13 @@ export async function PUT(request, { params }) {
           ? carried
           : { ...carried, ...sanitizeUnhealthyOverrides(comboStrategies[combo.name]) };
         delete comboStrategies[prev.name];
-        await updateSettings({ comboStrategies });
+        try {
+          await updateSettings({ comboStrategies });
+        } catch (carryError) {
+          // The rename already committed; a failed override carry must not 500
+          // a successful rename. The old strategy key stays until a later write.
+          console.warn("Failed to carry combo strategy overrides across rename:", carryError);
+        }
       }
     }
 

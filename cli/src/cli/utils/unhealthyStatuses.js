@@ -1,6 +1,20 @@
 /**
+ * CLI twin of src/shared/utils/unhealthyStatuses.js (CLI is CommonJS and
+ * cannot import it). Keep these values in sync with the shared constants:
+ * UNHEALTHY_THRESHOLD_MIN/MAX, UNHEALTHY_RESET_MS_MIN/MAX, DEFAULT_UNHEALTHY_STATUSES.
+ * tests/unit/cli-unhealthy-parity.test.js fails when this file drifts.
+ * Exported so menus can interpolate the real bounds instead of hardcoding them.
+ */
+const UNHEALTHY_THRESHOLD_MIN = 1;
+const UNHEALTHY_THRESHOLD_MAX = 20;
+const UNHEALTHY_RESET_MS_MIN = 60 * 1000;
+const UNHEALTHY_RESET_MS_MAX = 24 * 60 * 60 * 1000;
+const DEFAULT_UNHEALTHY_STATUSES = [401, 402, 403, 404];
+
+/**
  * Parse a status list typed in the CLI. Mirrors parseStatusesInput in
- * src/shared/utils/unhealthyStatuses.js (CLI is CommonJS and cannot import it).
+ * src/shared/utils/unhealthyStatuses.js (CLI is CommonJS and cannot import
+ * it; tests/unit/cli-unhealthy-parity.test.js keeps the two in agreement).
  * Strict: any invalid token rejects the whole input.
  * @returns {null|Array} null = invalid (caller keeps current), [] = "all",
  *   else canonical list: class markers first, then ascending deduped codes 400-599
@@ -26,4 +40,11 @@ function parseStatusesCsv(text) {
   return [...markers, ...codes];
 }
 
-module.exports = { parseStatusesCsv };
+module.exports = {
+  parseStatusesCsv,
+  UNHEALTHY_THRESHOLD_MIN,
+  UNHEALTHY_THRESHOLD_MAX,
+  UNHEALTHY_RESET_MS_MIN,
+  UNHEALTHY_RESET_MS_MAX,
+  DEFAULT_UNHEALTHY_STATUSES,
+};

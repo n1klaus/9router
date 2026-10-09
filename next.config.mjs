@@ -28,6 +28,12 @@ const nextConfig = {
   outputFileTracingExcludes: {
     "*": ["./gitbook/**/*"]
   },
+  // open-sse/services/comboHealth.js reaches this shared util through a
+  // relative import outside its own package; pin it so standalone tracing
+  // can never drop it (an app restart would 500 on every combo request).
+  outputFileTracingIncludes: {
+    "*": ["./src/shared/utils/unhealthyStatuses.js"]
+  },
   images: {
     unoptimized: true
   },

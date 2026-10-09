@@ -97,13 +97,30 @@ describe("unhealthyStatuses", () => {
     expect(resolveUnhealthyCfg({ unhealthyStatuses: [] }, globals).statuses).toEqual([]);
   });
 
+  it("tolerates null arguments and returns null when the switch is off", () => {
+    const globals = { comboUnhealthyThreshold: 3, comboUnhealthyResetMs: 86400000, comboUnhealthyStatuses: [404] };
+    // Default params only cover undefined; null must not throw.
+    expect(resolveUnhealthyCfg(null, globals)).toEqual({ threshold: 3, resetMs: 86400000, statuses: [404] });
+    expect(resolveUnhealthyCfg({ unhealthyThreshold: 5 }, null))
+      .toEqual({ threshold: 5, resetMs: undefined, statuses: undefined });
+    expect(() => resolveUnhealthyCfg(null, null)).not.toThrow();
+    // Switch off (or garbage that reads as off is impossible: only false disables).
+    expect(resolveUnhealthyCfg({ unhealthyThreshold: 5 }, { ...globals, comboUnhealthySkipEnabled: false })).toBe(null);
+    expect(resolveUnhealthyCfg({}, { ...globals, comboUnhealthySkipEnabled: true }))
+      .toEqual({ threshold: 3, resetMs: 86400000, statuses: [404] });
+    expect(resolveUnhealthyCfg({}, { comboUnhealthyThreshold: 3 })).not.toBe(null);
+  });
+
   it("normalizes stored lists or rejects them", () => {
     expect(normalizeStatusesList([])).toEqual([]);
     expect(normalizeStatusesList(["4xx", 429, 429])).toEqual(["4xx", 429]);
     expect(normalizeStatusesList([404, "5xx", "4xx", 403])).toEqual(["4xx", "5xx", 403, 404]);
+    expect(normalizeStatusesList(["4XX", "5XX", 404])).toEqual(["4xx", "5xx", 404]);
+    expect(normalizeStatusesList(["4xx", "4XX"])).toEqual(["4xx"]);
     expect(normalizeStatusesList([99, 404])).toBe(null);
     expect(normalizeStatusesList([null])).toBe(null);
     expect(normalizeStatusesList([400.5])).toBe(null);
+    expect(normalizeStatusesList(["404"])).toBe(null);
     expect(normalizeStatusesList("404")).toBe(null);
     expect(normalizeStatusesList(undefined)).toBe(null);
   });
@@ -129,6 +146,9 @@ describe("unhealthyStatuses", () => {
     expect(validateUnhealthySettingsPatch({ comboUnhealthyResetMs: 30000 })).toMatch(/comboUnhealthyResetMs/);
     expect(validateUnhealthySettingsPatch({ comboUnhealthyStatuses: "404" })).toMatch(/comboUnhealthyStatuses/);
     expect(validateUnhealthySettingsPatch({ comboUnhealthyStatuses: [200] })).toMatch(/comboUnhealthyStatuses/);
+    expect(validateUnhealthySettingsPatch({ comboUnhealthySkipEnabled: false })).toBe(null);
+    expect(validateUnhealthySettingsPatch({ comboUnhealthySkipEnabled: true })).toBe(null);
+    expect(validateUnhealthySettingsPatch({ comboUnhealthySkipEnabled: 0 })).toMatch(/comboUnhealthySkipEnabled/);
   });
 
   it("validates per-combo overrides and sanitizes bad fields", () => {

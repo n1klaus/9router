@@ -3,8 +3,13 @@ const { prompt, confirm, pause } = require("../utils/input");
 const { clearScreen, showStatus, showHeader } = require("../utils/display");
 const { formatDate } = require("../utils/format");
 const { selectModelFromList } = require("../utils/modelSelector");
-const { parseStatusesCsv } = require("../utils/unhealthyStatuses");
+const { parseStatusesCsv, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX, UNHEALTHY_RESET_MS_MIN, UNHEALTHY_RESET_MS_MAX, DEFAULT_UNHEALTHY_STATUSES } = require("../utils/unhealthyStatuses");
 const { showMenuWithBack } = require("../utils/menuHelper");
+
+// Reset-window prompt bounds in minutes, derived from the ms constants so the
+// copy and validation always match the shared limits.
+const RESET_MIN_MINUTES = UNHEALTHY_RESET_MS_MIN / 60000;
+const RESET_MAX_MINUTES = UNHEALTHY_RESET_MS_MAX / 60000;
 
 /**
  * Format model to string (handle both string and object)
@@ -101,30 +106,30 @@ async function handleEditSingleCombo(combo) {
     let changed = false;
     console.log("\nUnhealthy skip (Enter = keep, '-' = inherit global):");
 
-    const thRaw = ((await prompt(`  Threshold 1-20 (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
+    const thRaw = ((await prompt(`  Threshold ${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX} (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
     if (thRaw === "-") {
       if ("unhealthyThreshold" in override) { delete override.unhealthyThreshold; changed = true; }
     } else if (thRaw !== "") {
       const n = Number(thRaw);
-      if (Number.isInteger(n) && n >= 1 && n <= 20) {
+      if (/^\d+$/.test(thRaw) && Number.isInteger(n) && n >= UNHEALTHY_THRESHOLD_MIN && n <= UNHEALTHY_THRESHOLD_MAX) {
         if (override.unhealthyThreshold !== n) { override.unhealthyThreshold = n; changed = true; }
-      } else showStatus(`Invalid threshold "${thRaw}" (1-20) — kept current`, "error");
+      } else showStatus(`Invalid threshold "${thRaw}" (${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX}) — kept current`, "error");
     }
 
     const gMs = settingsData.comboUnhealthyResetMs ?? 86400000;
     const resetGlobalLabel = gMs % 60000 === 0 ? `${gMs / 60000}` : `${(gMs / 60000).toFixed(2).replace(/\.?0+$/, "")} (${gMs} ms)`;
-    const resetRaw = ((await prompt(`  Reset minutes 1-1440, decimals allowed e.g. 1.5 = 90s (global ${resetGlobalLabel}): `)) || "").trim();
+    const resetRaw = ((await prompt(`  Reset minutes ${RESET_MIN_MINUTES}-${RESET_MAX_MINUTES}, decimals allowed e.g. 1.5 = 90s (global ${resetGlobalLabel}): `)) || "").trim();
     if (resetRaw === "-") {
       if ("unhealthyResetMs" in override) { delete override.unhealthyResetMs; changed = true; }
     } else if (resetRaw !== "") {
       const minutes = Number(resetRaw);
       const ms = Math.round(minutes * 60000);
-      if (Number.isFinite(minutes) && minutes >= 1 && minutes <= 1440 && Number.isInteger(ms) && ms >= 60000 && ms <= 86400000) {
+      if (/^\d+(\.\d+)?$/.test(resetRaw) && Number.isFinite(minutes) && minutes >= RESET_MIN_MINUTES && minutes <= RESET_MAX_MINUTES && Number.isInteger(ms) && ms >= UNHEALTHY_RESET_MS_MIN && ms <= UNHEALTHY_RESET_MS_MAX) {
         if (override.unhealthyResetMs !== ms) { override.unhealthyResetMs = ms; changed = true; }
-      } else showStatus(`Invalid reset window "${resetRaw}" (1-1440 minutes) — kept current`, "error");
+      } else showStatus(`Invalid reset window "${resetRaw}" (${RESET_MIN_MINUTES}-${RESET_MAX_MINUTES} minutes) — kept current`, "error");
     }
 
-    const statusesGlobal = Array.isArray(settingsData.comboUnhealthyStatuses) ? settingsData.comboUnhealthyStatuses : [401, 402, 403, 404]; // server default when missing
+    const statusesGlobal = Array.isArray(settingsData.comboUnhealthyStatuses) ? settingsData.comboUnhealthyStatuses : [...DEFAULT_UNHEALTHY_STATUSES]; // server default when missing
     const curStatuses = Array.isArray(override.unhealthyStatuses) ? override.unhealthyStatuses : undefined;
     const statusesLabel = curStatuses === undefined
       ? `global ${statusesGlobal.join(",") || "all"}`

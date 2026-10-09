@@ -1,6 +1,6 @@
 const api = require("../api/client");
 const { confirm, pause, prompt } = require("../utils/input");
-const { parseStatusesCsv } = require("../utils/unhealthyStatuses");
+const { parseStatusesCsv, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX, UNHEALTHY_RESET_MS_MIN, UNHEALTHY_RESET_MS_MAX, DEFAULT_UNHEALTHY_STATUSES } = require("../utils/unhealthyStatuses");
 const { showStatus } = require("../utils/display");
 const { showMenuWithBack } = require("../utils/menuHelper");
 
@@ -15,6 +15,11 @@ const COLORS = {
 };
 
 const DEFAULT_PASSWORD = "123456";
+
+// Reset-window prompt bounds in minutes, derived from the ms constants so the
+// copy and validation always match the shared limits.
+const RESET_MIN_MINUTES = UNHEALTHY_RESET_MS_MIN / 60000;
+const RESET_MAX_MINUTES = UNHEALTHY_RESET_MS_MAX / 60000;
 
 /**
  * Show settings menu (tunnel + RTK + reset password)
@@ -84,6 +89,13 @@ async function showSettingsMenu(breadcrumb = []) {
         action: async (d) => { await toggleHeadroom(d?.settings?.headroomEnabled === true); return true; }
       },
       {
+        label: (d) => {
+          const on = d?.settings?.comboUnhealthySkipEnabled !== false;
+          return `Combo unhealthy skip: ${on ? "ON" : "OFF"} → toggle`;
+        },
+        action: async (d) => { await toggleComboUnhealthySkip(d?.settings?.comboUnhealthySkipEnabled !== false); return true; }
+      },
+      {
         label: (d) => `Combo unhealthy: failure threshold (current ${d?.settings?.comboUnhealthyThreshold ?? 3})`,
         action: async (d) => { await setComboUnhealthyThreshold(d?.settings?.comboUnhealthyThreshold ?? 3); return true; }
       },
@@ -99,10 +111,10 @@ async function showSettingsMenu(breadcrumb = []) {
         label: (d) => {
           const statuses = Array.isArray(d?.settings?.comboUnhealthyStatuses)
             ? d.settings.comboUnhealthyStatuses
-            : [401, 402, 403, 404]; // server default when settings value missing
+            : [...DEFAULT_UNHEALTHY_STATUSES]; // server default when settings value missing
           return `Combo unhealthy: status codes (current ${statuses.join(",") || "all"})`;
         },
-        action: async (d) => { await setComboUnhealthyStatuses(Array.isArray(d?.settings?.comboUnhealthyStatuses) ? d.settings.comboUnhealthyStatuses : [401, 402, 403, 404]); return true; }
+        action: async (d) => { await setComboUnhealthyStatuses(Array.isArray(d?.settings?.comboUnhealthyStatuses) ? d.settings.comboUnhealthyStatuses : [...DEFAULT_UNHEALTHY_STATUSES]); return true; }
       },
       {
         label: "🔑 Reset Password to Default",
@@ -201,16 +213,32 @@ async function toggleHeadroom(currentlyOn) {
   }
   await pause();
 }
+
+/**
+ * Toggle combo unhealthy-skip globally via API (default ON; false disables
+ * skipping server-side for every combo without a per-combo override).
+ * @param {boolean} currentlyOn
+ */
+async function toggleComboUnhealthySkip(currentlyOn) {
+  const next = !currentlyOn;
+  const result = await api.updateSettings({ comboUnhealthySkipEnabled: next });
+  if (result.success) {
+    showStatus(`Combo unhealthy skip ${next ? "enabled" : "disabled"}`, "success");
+  } else {
+    showStatus(`Failed: ${result.error}`, "error");
+  }
+  await pause();
+}
 /**
  * Set global combo unhealthy-skip failure threshold via API
  * @param {number} current - Current threshold
  */
 async function setComboUnhealthyThreshold(current) {
-  const raw = ((await prompt(`Failure threshold 1-20 (current ${current}, Enter to keep): `)) || "").trim();
+  const raw = ((await prompt(`Failure threshold ${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX} (current ${current}, Enter to keep): `)) || "").trim();
   if (raw === "") { showStatus("Kept current threshold", "info"); await pause(); return; }
   const n = Number(raw);
-  if (!Number.isInteger(n) || n < 1 || n > 20) {
-    showStatus(`Invalid threshold "${raw}" (1-20) — kept current`, "error");
+  if (!/^\d+$/.test(raw) || !Number.isInteger(n) || n < UNHEALTHY_THRESHOLD_MIN || n > UNHEALTHY_THRESHOLD_MAX) {
+    showStatus(`Invalid threshold "${raw}" (${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX}) — kept current`, "error");
     await pause();
     return;
   }
@@ -228,12 +256,13 @@ async function setComboUnhealthyReset(currentMs) {
   // The server accepts any whole number of milliseconds in [60s, 24h]; the CLI
   // prompts in minutes but accepts decimals so sub-minute values are preserved.
   const fmt = (ms) => (ms % 60000 === 0 ? `${ms / 60000} min` : `${(ms / 60000).toFixed(2).replace(/\.?0+$/, "")} min (${ms} ms)`);
-  const raw = ((await prompt(`Reset window minutes 1-1440, decimals allowed e.g. 1.5 = 90s (current ${fmt(currentMs)}, Enter to keep): `)) || "").trim();
+  const raw = ((await prompt(`Reset window minutes ${RESET_MIN_MINUTES}-${RESET_MAX_MINUTES}, decimals allowed e.g. 1.5 = 90s (current ${fmt(currentMs)}, Enter to keep): `)) || "").trim();
   if (raw === "") { showStatus("Kept current reset window", "info"); await pause(); return; }
   const minutes = Number(raw);
   const ms = Math.round(minutes * 60000);
-  if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440 || !Number.isInteger(ms) || ms < 60000 || ms > 86400000) {
-    showStatus(`Invalid reset window "${raw}" (1-1440 minutes) — kept current`, "error");
+  // /^\d+(\.\d+)?$/ keeps decimal minutes (1.5 = 90 s) but rejects hex/exponent forms.
+  if (!/^\d+(\.\d+)?$/.test(raw) || !Number.isFinite(minutes) || minutes < RESET_MIN_MINUTES || minutes > RESET_MAX_MINUTES || !Number.isInteger(ms) || ms < UNHEALTHY_RESET_MS_MIN || ms > UNHEALTHY_RESET_MS_MAX) {
+    showStatus(`Invalid reset window "${raw}" (${RESET_MIN_MINUTES}-${RESET_MAX_MINUTES} minutes) — kept current`, "error");
     await pause();
     return;
   }
