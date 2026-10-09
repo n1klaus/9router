@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { DndContext, closestCenter, KeyboardSensor, PointerSensor, useSensor, useSensors } from "@dnd-kit/core";
 import { arrayMove, SortableContext, sortableKeyboardCoordinates, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
@@ -9,7 +9,7 @@ import { Card, Button, Modal, Input, CardSkeleton, ModelSelectModal, ConfirmModa
 import { useCopyToClipboard } from "@/shared/hooks/useCopyToClipboard";
 import { useModelCaps } from "@/shared/hooks/useModelCaps";
 import { aggregateComboCapabilities } from "open-sse/providers/capabilities.js";
-import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes } from "@/shared/utils/unhealthyStatuses";
+import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes, normalizeStatusesList, isValidThreshold, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX } from "@/shared/utils/unhealthyStatuses";
 
 // Validate combo name: only a-z, A-Z, 0-9, -, _
 const VALID_NAME_REGEX = /^[a-zA-Z0-9_.\-]+$/;
@@ -60,6 +60,32 @@ export default function CombosPage() {
   const [editingCombo, setEditingCombo] = useState(null);
   const [activeProviders, setActiveProviders] = useState([]);
   const [comboStrategies, setComboStrategies] = useState({});
+  const comboStrategiesRef = useRef({});
+  const applyStrategies = (updated) => {
+    comboStrategiesRef.current = updated;
+    setComboStrategies(updated);
+  };
+  const [strategyError, setStrategyError] = useState({}); // comboName -> message
+  const setComboStrategyError = (comboName, message) => {
+    setStrategyError((prev) => ({ ...prev, [comboName]: message }));
+  };
+  // Serialize strategy writes so concurrent save/delete/bulk ops cannot interleave
+  // PATCHes built from different ref snapshots.
+  const strategyQueue = useRef(Promise.resolve());
+  // Write activity markers: fetchData must not apply a settings snapshot that
+  // was taken while a queued/optimistic strategy write was in flight, or it
+  // would clobber the edit.
+  const strategyWriteSeq = useRef(0);
+  const strategyPendingWrites = useRef(0);
+  const queueStrategyWrite = (run) => {
+    strategyWriteSeq.current += 1;
+    strategyPendingWrites.current += 1;
+    const task = strategyQueue.current.then(run).finally(() => {
+      strategyPendingWrites.current -= 1;
+    });
+    strategyQueue.current = task.catch(() => {}); // keep the chain alive after a failure
+    return task;
+  };
   const [capacityAdapter, setCapacityAdapter] = useState(EMPTY_CAPACITY_ADAPTER);
   const { getCaps } = useModelCaps();
   const [confirmState, setConfirmState] = useState(null);
@@ -155,6 +181,9 @@ export default function CombosPage() {
   };
 
   const fetchData = async () => {
+    // Snapshot write activity before issuing the GETs; see guard below.
+    const strategyWritesAtStart = strategyWriteSeq.current;
+    const strategyPendingAtStart = strategyPendingWrites.current;
     try {
       const [combosRes, providersRes, settingsRes] = await Promise.all([
         fetch("/api/combos"),
@@ -170,7 +199,12 @@ export default function CombosPage() {
       if (providersRes.ok) {
         setActiveProviders(providersData.connections || []);
       }
-      setComboStrategies(settingsData.comboStrategies || {});
+      // Apply the fetched strategies only when no strategy write overlapped
+      // this fetch — otherwise the (possibly stale) snapshot would clobber a
+      // queued or optimistic edit. The write itself applies its own state.
+      if (strategyPendingAtStart === 0 && strategyWriteSeq.current === strategyWritesAtStart) {
+        applyStrategies(settingsData.comboStrategies || {});
+      }
       const rawAdapter = settingsData.capacityAdapter || {};
       const normalized = {};
       for (const cap of CAPACITY_ADAPTER_CAPS) {
@@ -235,19 +269,26 @@ export default function CombosPage() {
     }
   };
 
-  const pruneStrategiesForNames = (names, base = comboStrategies) => {
+  const pruneStrategiesForNames = (names, base = comboStrategiesRef.current) => {
     const updated = { ...base };
     for (const name of names) delete updated[name];
     return updated;
   };
 
   const persistComboStrategies = async (updated) => {
-    await fetch("/api/settings", {
+    const res = await fetch("/api/settings", {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ comboStrategies: updated }),
     });
-    setComboStrategies(updated);
+    if (!res.ok) throw new Error(`Failed to save combo settings (${res.status})`);
+  };
+
+  // PATCH then publish; used by the delete/bulk paths, which keep their existing
+  // failure behavior (the caller alerts).
+  const persistAndApply = async (updated) => {
+    await persistComboStrategies(updated);
+    applyStrategies(updated);
   };
 
   const handleDelete = async (id) => {
@@ -261,7 +302,7 @@ export default function CombosPage() {
           const res = await fetch(`/api/combos/${id}`, { method: "DELETE" });
           if (res.ok) {
             if (combo?.name) {
-              await persistComboStrategies(pruneStrategiesForNames([combo.name]));
+              await queueStrategyWrite(async () => persistAndApply(pruneStrategiesForNames([combo.name])));
             }
             setCombos((prev) => prev.filter((c) => c.id !== id));
             setSelectedIds((prev) => prev.filter((x) => x !== id));
@@ -287,17 +328,35 @@ export default function CombosPage() {
         setConfirmState((prev) => prev ? { ...prev, loading: true } : null);
         setBulkBusy(true);
         try {
-          const ids = selectedCombos.map((c) => c.id);
-          const names = selectedCombos.map((c) => c.name);
+          const targets = selectedCombos.map((c) => ({ id: c.id, name: c.name }));
           const results = await Promise.all(
-            ids.map((id) => fetch(`/api/combos/${id}`, { method: "DELETE" }))
+            targets.map(async ({ id }) => {
+              try {
+                const res = await fetch(`/api/combos/${id}`, { method: "DELETE" });
+                return res.ok;
+              } catch (error) {
+                console.log(`Error deleting combo ${id}:`, error);
+                return false;
+              }
+            })
           );
-          const failed = results.filter((r) => !r.ok).length;
-          await persistComboStrategies(pruneStrategiesForNames(names));
-          setCombos((prev) => prev.filter((c) => !ids.includes(c.id)));
-          clearSelection();
+          const deleted = targets.filter((_, i) => results[i]);
+          const failedNames = targets.filter((_, i) => !results[i]).map((c) => c.name);
+
+          // Only successful deletes may leave the UI or lose their strategy overrides.
+          if (deleted.length > 0) {
+            const deletedIds = new Set(deleted.map((c) => c.id));
+            setCombos((prev) => prev.filter((c) => !deletedIds.has(c.id)));
+            setSelectedIds((prev) => prev.filter((x) => !deletedIds.has(x)));
+            try {
+              await queueStrategyWrite(async () => persistAndApply(pruneStrategiesForNames(deleted.map((c) => c.name))));
+            } catch (error) {
+              console.log("Error pruning combo strategies:", error);
+              alert("Combos deleted, but pruning their strategy overrides failed.");
+            }
+          }
           setConfirmState(null);
-          if (failed > 0) alert(`Deleted with ${failed} failure${failed === 1 ? "" : "s"}.`);
+          if (failedNames.length > 0) alert(`Failed to delete: ${failedNames.join(", ")}`);
         } catch (error) {
           console.log("Error bulk deleting combos:", error);
           alert("Failed to delete selected combos");
@@ -311,38 +370,50 @@ export default function CombosPage() {
 
   // Merge a per-combo strategy patch into settings.comboStrategies. null values
   // clear a key; a default "fallback" strategy is dropped; an entry with no
-  // remaining keys is removed.
-  const handleSetComboStrategy = async (comboName, patch) => {
-    try {
-      const updated = { ...comboStrategies };
-      const next = { ...(updated[comboName] || {}) };
+  // remaining keys is removed. Writes are serialized through the queue and build
+  // from the ref, never the render closure; the UI updates optimistically and
+  // rolls back on failure.
+  const handleSetComboStrategy = (comboName, patch) => {
+    return queueStrategyWrite(async () => {
+      const prev = comboStrategiesRef.current;
+      const current = prev[comboName] ?? null;
+      const next = { ...(current || {}) };
       for (const [key, value] of Object.entries(patch)) {
         if (value === null || value === undefined) delete next[key];
         else next[key] = value;
       }
       if (!next.fallbackStrategy || next.fallbackStrategy === "fallback") delete next.fallbackStrategy;
+      const updated = { ...prev };
       if (Object.keys(next).length === 0) delete updated[comboName];
       else updated[comboName] = next;
-
-      await persistComboStrategies(updated);
-    } catch (error) {
-      console.log("Error updating combo strategy:", error);
-    }
+      if (JSON.stringify(updated[comboName] ?? null) === JSON.stringify(current)) return; // no-op blur
+      applyStrategies(updated); // optimistic
+      try {
+        await persistComboStrategies(updated);
+        setComboStrategyError(comboName, null);
+      } catch (error) {
+        console.log("Error updating combo strategy:", error);
+        applyStrategies(prev); // roll back the optimistic value
+        setComboStrategyError(comboName, "Failed to save combo settings.");
+      }
+    }).catch(() => {}); // surfaced inline via strategyError, not as an unhandled rejection
   };
 
   const handleBulkSetStrategy = async (strategy) => {
     if (selectedCombos.length === 0 || !strategy) return;
     setBulkBusy(true);
     try {
-      const updated = { ...comboStrategies };
-      for (const combo of selectedCombos) {
-        const next = { ...(updated[combo.name] || {}) };
-        if (strategy && strategy !== "fallback") next.fallbackStrategy = strategy;
-        else delete next.fallbackStrategy;
-        if (Object.keys(next).length === 0) delete updated[combo.name];
-        else updated[combo.name] = next;
-      }
-      await persistComboStrategies(updated);
+      await queueStrategyWrite(async () => {
+        const updated = { ...comboStrategiesRef.current };
+        for (const combo of selectedCombos) {
+          const next = { ...(updated[combo.name] || {}) };
+          if (strategy && strategy !== "fallback") next.fallbackStrategy = strategy;
+          else delete next.fallbackStrategy;
+          if (Object.keys(next).length === 0) delete updated[combo.name];
+          else updated[combo.name] = next;
+        }
+        await persistAndApply(updated);
+      });
     } catch (error) {
       console.log("Error bulk updating combo strategy:", error);
       alert("Failed to update strategy for selected combos");
@@ -500,6 +571,7 @@ export default function CombosPage() {
                   onDelete={() => handleDelete(combo.id)}
                   strategy={comboStrategies[combo.name] || {}}
                   onSetStrategy={(patch) => handleSetComboStrategy(combo.name, patch)}
+                  error={strategyError[combo.name] || null}
                   selected={selectedIds.includes(combo.id)}
                   onToggleSelect={() => toggleSelect(combo.id)}
                 />
@@ -563,23 +635,60 @@ const fmtK = (n) => {
   return `${Math.round(n / 1000)}k`;
 };
 
-function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, selected = false, onToggleSelect }) {
+function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], copied, onCopy, onEdit, onDelete, strategy = {}, onSetStrategy, error = null, selected = false, onToggleSelect }) {
   const [showJudgeSelect, setShowJudgeSelect] = useState(false);
-  const [statusesNonce, setStatusesNonce] = useState(0);
   const cardClasses = splitStatusClasses(strategy.unhealthyStatuses).classes;
   const statusesDefault = formatStatusCodes(strategy.unhealthyStatuses);
-  // Uncontrolled input keyed by the persisted override: remounts with fresh
-  // defaults on save; invalid input bumps the nonce to revert to saved.
-  const statusesKey = `${JSON.stringify(strategy.unhealthyStatuses ?? null)}:${statusesNonce}`;
+  const [statusesDraft, setStatusesDraft] = useState(null); // non-null = unparseable text being kept
+  const [cardError, setCardError] = useState(null);
   const commitStatuses = (text) => {
-    const typed = parseStatusesInput(text);
-    if (typed === null) { setStatusesNonce((n) => n + 1); return; }
-    const next = typed.length === 0
-      ? (cardClasses.length ? [...cardClasses] : null)
-      : [...cardClasses, ...typed];
-    onSetStrategy({ unhealthyStatuses: next });
+    const raw = (text || "").trim();
+    setCardError(null);
+    if (raw === "") {
+      setStatusesDraft(null);
+      // Empty box: keep class markers; with none, clear the override (inherit global).
+      onSetStrategy({ unhealthyStatuses: cardClasses.length ? [...cardClasses] : null });
+      return;
+    }
+    const parsed = parseStatusesInput(raw);
+    if (parsed === null) {
+      setStatusesDraft(raw); // keep what the user typed
+      setCardError('Invalid status list. Use codes 400-599, "4xx"/"5xx", or "all".');
+      return;
+    }
+    setStatusesDraft(null);
+    // "all" is the explicit empty list (count every error), not inherit.
+    onSetStrategy({ unhealthyStatuses: parsed.length === 0 ? [] : (normalizeStatusesList([...cardClasses, ...parsed]) ?? []) });
   };
-  const toggleCardClass = (marker, on) => onSetStrategy({ unhealthyStatuses: toggleStatusClass(strategy.unhealthyStatuses ?? [], marker, on) });
+  const toggleCardClass = (marker, on) => {
+    setCardError(null);
+    const next = normalizeStatusesList(toggleStatusClass(strategy.unhealthyStatuses ?? [], marker, on)) ?? [];
+    // Unchecking the last marker returns to inherit rather than "all".
+    onSetStrategy({ unhealthyStatuses: next.length === 0 ? null : next });
+  };
+  const commitThreshold = (text) => {
+    const raw = (text || "").trim();
+    setCardError(null);
+    if (raw === "") { onSetStrategy({ unhealthyThreshold: null }); return; }
+    if (!/^\d+$/.test(raw)) { setCardError(`Invalid threshold. Use a whole number ${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX}, or leave empty to inherit.`); return; }
+    const n = Number(raw);
+    if (!isValidThreshold(n)) { setCardError(`Invalid threshold. Use a whole number ${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX}, or leave empty to inherit.`); return; }
+    onSetStrategy({ unhealthyThreshold: n });
+  };
+  const commitReset = (text) => {
+    const raw = (text || "").trim();
+    setCardError(null);
+    if (raw === "") { onSetStrategy({ unhealthyResetMs: null }); return; }
+    if (!/^\d+$/.test(raw)) { setCardError("Invalid reset window. Use whole minutes 1-1440, or leave empty to inherit."); return; }
+    const minutes = Number(raw);
+    if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) { setCardError("Invalid reset window. Use whole minutes 1-1440, or leave empty to inherit."); return; }
+    onSetStrategy({ unhealthyResetMs: minutes * 60000 });
+  };
+  // Exact minutes (one decimal when needed): 90000ms renders "1.5", never
+  // Math.round(1.5) = "2", and a plain blur must not rewrite the value.
+  const resetDisplay = strategy.unhealthyResetMs == null
+    ? ""
+    : String(Math.round((strategy.unhealthyResetMs / 60000) * 10) / 10);
   const current = strategy.fallbackStrategy || "fallback";
   const judge = strategy.judgeModel || "";
   const isFusion = current === "fusion";
@@ -707,34 +816,38 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
         <label className="flex items-center gap-1">
           threshold
           <Input
+            key={`th:${strategy.unhealthyThreshold ?? "inherit"}`}
             type="number"
             min="1"
             max="20"
             placeholder="inherit"
-            value={strategy.unhealthyThreshold ?? ""}
-            onChange={(e) => {
-              const raw = e.target.value;
-              onSetStrategy({ unhealthyThreshold: raw === "" ? null : Math.min(20, Math.max(1, parseInt(raw, 10) || 1)) });
-            }}
+            defaultValue={strategy.unhealthyThreshold ?? ""}
+            onBlur={(e) => commitThreshold(e.target.value)}
+            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+            title="Empty = inherit the global threshold"
             className="w-16 text-center"
           />
         </label>
         <label className="flex items-center gap-1">
           reset min
           <Input
+            key={`rs:${strategy.unhealthyResetMs ?? "inherit"}`}
             type="number"
             min="1"
             max="1440"
             placeholder="inherit"
-            value={strategy.unhealthyResetMs != null ? Math.round(strategy.unhealthyResetMs / 60000) : ""}
-            onChange={(e) => {
-              const raw = e.target.value;
-              onSetStrategy({ unhealthyResetMs: raw === "" ? null : Math.min(1440, Math.max(1, parseInt(raw, 10) || 1)) * 60000 });
+            defaultValue={resetDisplay}
+            onBlur={(e) => {
+              const text = (e.target.value || "").trim();
+              if (text === resetDisplay) return; // untouched on blur — never rewrite the value
+              commitReset(text);
             }}
+            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+            title="Empty = inherit the global reset window"
             className="w-16 text-center"
           />
         </label>
-        <label className="flex items-center gap-1">
+        <span className="flex flex-wrap items-center gap-1">
           statuses
           {["4xx", "5xx"].map((marker) => (
             <label key={marker} className="flex cursor-pointer items-center gap-1 select-none" title={`all ${marker} errors`}>
@@ -748,14 +861,19 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             </label>
           ))}
           <Input
-            key={statusesKey}
-            placeholder="inherit"
-            defaultValue={statusesDefault}
+            value={statusesDraft ?? statusesDefault}
+            onChange={(e) => setStatusesDraft(e.target.value)}
             onBlur={(e) => commitStatuses(e.target.value)}
-            disabled={cardClasses.length > 0}
+            onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
+            placeholder={strategy.unhealthyStatuses === undefined ? "inherit" : "all"}
+            title='Codes 400-599, "4xx"/"5xx", or "all" (every error); empty = inherit global'
             className="w-28 text-center"
           />
-        </label>
+        </span>
+        <span className="italic opacity-80">empty = inherit · all = every error</span>
+        {(cardError || error) && (
+          <p className="w-full text-[11px] text-red-500">{cardError || error}</p>
+        )}
       </div>
 
       {/* Judge model picker (single-select; combo members make natural judges too) */}

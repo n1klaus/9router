@@ -3,6 +3,7 @@ import { getSettings, updateSettings } from "@/lib/localDb";
 import { applyOutboundProxyEnv } from "@/lib/network/outboundProxy";
 import { resetComboRotation } from "open-sse/services/combo.js";
 import { resetComboHealth } from "open-sse/services/comboHealth.js";
+import { validateUnhealthySettingsPatch, validateComboStrategies, normalizeStatusesList, sanitizeUnhealthyOverrides } from "@/shared/utils/unhealthyStatuses.js";
 import bcrypt from "bcryptjs";
 
 export const dynamic = "force-dynamic";
@@ -40,8 +41,35 @@ export async function PATCH(request) {
   try {
     const body = await request.json();
 
+    // Body must be a plain object: null would crash hasOwnProperty (500) and an
+    // array would spread numeric indices into updateSettings.
+    if (!body || typeof body !== "object" || Array.isArray(body)) {
+      return NextResponse.json({ error: "Request body must be a JSON object" }, { status: 400 });
+    }
+
     // Strip protected secrets before any internal handling sets them
     for (const key of PROTECTED_SETTING_KEYS) delete body[key];
+
+    // Reject invalid unhealthy-skip values instead of persisting them. The UI and
+    // CLI clamp/validate first, so a rejection means a non-UI caller sent garbage.
+    const unhealthyError = validateUnhealthySettingsPatch(body) || validateComboStrategies(body.comboStrategies);
+    if (unhealthyError) {
+      return NextResponse.json({ error: unhealthyError }, { status: 400 });
+    }
+    if (Object.prototype.hasOwnProperty.call(body, "comboUnhealthyStatuses")) {
+      body.comboUnhealthyStatuses = normalizeStatusesList(body.comboUnhealthyStatuses);
+    }
+    if (body.comboStrategies === null) {
+      // null passes validation (treated as "unset") but must never be persisted:
+      // combo.js reads comboStrategies[comboName] and would throw on null.
+      delete body.comboStrategies;
+    } else if (body.comboStrategies && typeof body.comboStrategies === "object" && !Array.isArray(body.comboStrategies)) {
+      for (const [name, entry] of Object.entries(body.comboStrategies)) {
+        if (entry && typeof entry === "object" && !Array.isArray(entry)) {
+          body.comboStrategies[name] = sanitizeUnhealthyOverrides(entry);
+        }
+      }
+    }
 
     // If updating password, hash it
     if (body.newPassword) {
@@ -96,8 +124,11 @@ export async function PATCH(request) {
     ) {
       resetComboRotation();
     }
-    // Invalidate health state when unhealthy-skip settings change
+    // Invalidate health state when unhealthy-skip settings change.
+    // comboUnhealthySkipEnabled matters here: disabling the flag must clear
+    // stale skips so a later re-enable starts clean.
     if (
+      Object.prototype.hasOwnProperty.call(body, "comboUnhealthySkipEnabled") ||
       Object.prototype.hasOwnProperty.call(body, "comboUnhealthyThreshold") ||
       Object.prototype.hasOwnProperty.call(body, "comboUnhealthyResetMs") ||
       Object.prototype.hasOwnProperty.call(body, "comboUnhealthyStatuses") ||

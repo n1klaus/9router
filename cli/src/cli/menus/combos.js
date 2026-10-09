@@ -3,8 +3,14 @@ const { prompt, confirm, pause } = require("../utils/input");
 const { clearScreen, showStatus, showHeader } = require("../utils/display");
 const { formatDate } = require("../utils/format");
 const { selectModelFromList } = require("../utils/modelSelector");
+const { parseStatusesCsv, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX, UNHEALTHY_RESET_MS_MIN, UNHEALTHY_RESET_MS_MAX, DEFAULT_UNHEALTHY_STATUSES } = require("../utils/unhealthyStatuses");
 const { showMenuWithBack } = require("../utils/menuHelper");
 const { comboModelId } = require("../utils/comboModelId");
+
+// Reset-window prompt bounds in minutes, derived from the ms constants so the
+// copy and validation always match the shared limits.
+const RESET_MIN_MINUTES = UNHEALTHY_RESET_MS_MIN / 60000;
+const RESET_MAX_MINUTES = UNHEALTHY_RESET_MS_MAX / 60000;
 
 /**
  * Format model to string (handle both string and object)
@@ -16,6 +22,7 @@ function formatModel(model) {
   }
   return String(model);
 }
+
 
 /**
  * Show actions for a specific combo
@@ -49,6 +56,7 @@ async function showComboActions(combo, breadcrumb = []) {
     ]
   });
 }
+
 
 /**
  * Handle editing a single combo
@@ -87,39 +95,73 @@ async function handleEditSingleCombo(combo) {
   const finalModels = models.length > 0 ? models : combo.models;
   // Per-combo unhealthy-skip overrides live in settings.comboStrategies[name],
   // not on the combo record. Enter = keep, "-" = inherit global.
+  // Renames migrate the entry: read the old key, write the new one.
   const settingsRes = await api.getSettings();
-  const settingsData = (settingsRes.success && settingsRes.data) || {};
-  const comboStrategies = { ...(settingsData.comboStrategies || {}) };
-  const override = { ...(comboStrategies[name] || {}) };
-  console.log("\nUnhealthy skip (Enter = keep, '-' = inherit global):");
+  if (!settingsRes.success) {
+    // Never write comboStrategies from a failed read: it would drop every other combo's entry.
+    showStatus(`Failed to load settings: ${settingsRes.error} — skipped unhealthy-skip overrides`, "error");
+  } else {
+    const settingsData = settingsRes.data || {};
+    const comboStrategies = { ...(settingsData.comboStrategies || {}) };
+    const override = { ...(comboStrategies[combo.name] || {}) };
+    let changed = false;
+    console.log("\nUnhealthy skip (Enter = keep, '-' = inherit global):");
 
-  const thRaw = ((await prompt(`  Threshold 1-20 (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
-  if (thRaw === "-") delete override.unhealthyThreshold;
-  else if (thRaw !== "") override.unhealthyThreshold = Math.min(20, Math.max(1, parseInt(thRaw, 10) || 1));
+    const thRaw = ((await prompt(`  Threshold ${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX} (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
+    if (thRaw === "-") {
+      if ("unhealthyThreshold" in override) { delete override.unhealthyThreshold; changed = true; }
+    } else if (thRaw !== "") {
+      const n = Number(thRaw);
+      if (/^\d+$/.test(thRaw) && Number.isInteger(n) && n >= UNHEALTHY_THRESHOLD_MIN && n <= UNHEALTHY_THRESHOLD_MAX) {
+        if (override.unhealthyThreshold !== n) { override.unhealthyThreshold = n; changed = true; }
+      } else showStatus(`Invalid threshold "${thRaw}" (${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX}) — kept current`, "error");
+    }
 
-  const resetGlobalMin = Math.round((settingsData.comboUnhealthyResetMs ?? 86400000) / 60000);
-  const resetRaw = ((await prompt(`  Reset minutes 1-1440 (global ${resetGlobalMin}): `)) || "").trim();
-  if (resetRaw === "-") delete override.unhealthyResetMs;
-  else if (resetRaw !== "") override.unhealthyResetMs = Math.min(1440, Math.max(1, parseInt(resetRaw, 10) || 1)) * 60000;
+    const gMs = settingsData.comboUnhealthyResetMs ?? 86400000;
+    const resetGlobalLabel = gMs % 60000 === 0 ? `${gMs / 60000}` : `${(gMs / 60000).toFixed(2).replace(/\.?0+$/, "")} (${gMs} ms)`;
+    const resetRaw = ((await prompt(`  Reset minutes ${RESET_MIN_MINUTES}-${RESET_MAX_MINUTES}, decimals allowed e.g. 1.5 = 90s (global ${resetGlobalLabel}): `)) || "").trim();
+    if (resetRaw === "-") {
+      if ("unhealthyResetMs" in override) { delete override.unhealthyResetMs; changed = true; }
+    } else if (resetRaw !== "") {
+      const minutes = Number(resetRaw);
+      const ms = Math.round(minutes * 60000);
+      if (/^\d+(\.\d+)?$/.test(resetRaw) && Number.isFinite(minutes) && minutes >= RESET_MIN_MINUTES && minutes <= RESET_MAX_MINUTES && Number.isInteger(ms) && ms >= UNHEALTHY_RESET_MS_MIN && ms <= UNHEALTHY_RESET_MS_MAX) {
+        if (override.unhealthyResetMs !== ms) { override.unhealthyResetMs = ms; changed = true; }
+      } else showStatus(`Invalid reset window "${resetRaw}" (${RESET_MIN_MINUTES}-${RESET_MAX_MINUTES} minutes) — kept current`, "error");
+    }
 
-  const statusesGlobal = settingsData.comboUnhealthyStatuses ?? [];
-  const curStatuses = override.unhealthyStatuses;
-  const statusesLabel = curStatuses === undefined
-    ? `global ${statusesGlobal.join(",") || "all"}`
-    : (curStatuses.length === 0 ? "all" : curStatuses.join(","));
-  const stRaw = ((await prompt(`  Statuses csv or "all" (${statusesLabel}): `)) || "").trim();
-  if (stRaw === "-") delete override.unhealthyStatuses;
-  else if (stRaw !== "") {
-    override.unhealthyStatuses = stRaw.toLowerCase() === "all"
-      ? []
-      : stRaw.split(",").map((s) => Number(s.trim())).filter((n) => Number.isFinite(n));
+    const statusesGlobal = Array.isArray(settingsData.comboUnhealthyStatuses) ? settingsData.comboUnhealthyStatuses : [...DEFAULT_UNHEALTHY_STATUSES]; // server default when missing
+    const curStatuses = Array.isArray(override.unhealthyStatuses) ? override.unhealthyStatuses : undefined;
+    const statusesLabel = curStatuses === undefined
+      ? `global ${statusesGlobal.join(",") || "all"}`
+      : (curStatuses.length === 0 ? "all" : curStatuses.join(","));
+    const stRaw = ((await prompt(`  Statuses csv or "all" (codes 400-599, 4xx/5xx) (${statusesLabel}): `)) || "").trim();
+    if (stRaw === "-") {
+      if ("unhealthyStatuses" in override) { delete override.unhealthyStatuses; changed = true; }
+    } else if (stRaw !== "") {
+      const parsed = parseStatusesCsv(stRaw);
+      if (parsed === null) showStatus(`Invalid status list "${stRaw}" — kept current`, "error");
+      else if (JSON.stringify(parsed) !== JSON.stringify(curStatuses ?? null)) { override.unhealthyStatuses = parsed; changed = true; }
+    }
+
+    // On rename collision (target already has an entry, e.g. concurrent edit),
+    // merge instead of clobbering: target keys win, carried keys fill the gaps.
+    const targetEntry = name !== combo.name ? comboStrategies[name] : undefined;
+    const merged = targetEntry && typeof targetEntry === "object" && !Array.isArray(targetEntry)
+      ? { ...override, ...targetEntry }
+      : override;
+
+    // Skip the PATCH when nothing changed: writing comboStrategies resets the
+    // server's in-memory health state for every combo.
+    if (changed || (name !== combo.name && Object.prototype.hasOwnProperty.call(comboStrategies, combo.name))) {
+      if (name !== combo.name) delete comboStrategies[combo.name];
+      if (!merged.fallbackStrategy || merged.fallbackStrategy === "fallback") delete merged.fallbackStrategy;
+      if (Object.keys(merged).length === 0) delete comboStrategies[name];
+      else comboStrategies[name] = merged;
+      const strategySync = await api.updateSettings({ comboStrategies });
+      if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
+    }
   }
-
-  if (!override.fallbackStrategy || override.fallbackStrategy === "fallback") delete override.fallbackStrategy;
-  if (Object.keys(override).length === 0) delete comboStrategies[name];
-  else comboStrategies[name] = override;
-  const strategySync = await api.updateSettings({ comboStrategies });
-  if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
   
   const result = await api.updateCombo(combo.id, { name, models: finalModels });
   
@@ -130,6 +172,7 @@ async function handleEditSingleCombo(combo) {
   }
   await pause();
 }
+
 
 /**
  * Handle deleting a single combo
@@ -147,6 +190,7 @@ async function handleDeleteSingleCombo(combo) {
     await pause();
   }
 }
+
 
 /**
  * Main combos menu - list all combos and actions
@@ -187,6 +231,7 @@ async function showCombosMenu(breadcrumb = []) {
     }
   });
 }
+
 
 /**
  * Show combo detail with stats
@@ -229,6 +274,7 @@ async function showComboDetail(comboId) {
   await pause();
 }
 
+
 /**
  * Format combo for menu display
  */
@@ -240,6 +286,7 @@ function formatComboLabel(combo) {
     : modelsChain;
   return `${combo.name}: ${displayModels}`;
 }
+
 
 /**
  * Create new combo
@@ -355,164 +402,6 @@ async function handleCreateCombo() {
   }
   
   showStatus(`Combo "${name}" created successfully!`, "success");
-  await pause();
-}
-
-/**
- * Edit combo - select which combo to edit
- */
-async function handleEditCombo(combos) {
-  if (combos.length === 0) {
-    showStatus("No combos available", "warning");
-    await pause();
-    return;
-  }
-  
-  let selectedCombo = null;
-  
-  await showMenuWithBack({
-    title: "✏️  Select Combo to Edit",
-    items: combos.map(combo => ({
-      label: formatComboLabel(combo),
-      action: async () => {
-        selectedCombo = combo;
-        return false;
-      }
-    }))
-  });
-  
-  if (!selectedCombo) return;
-  await editSingleCombo(selectedCombo);
-}
-
-/**
- * Edit a single combo
- */
-async function editSingleCombo(combo) {
-  clearScreen();
-  showStatus(`Editing combo: ${combo.name}`, "info");
-  console.log();
-  
-  const newName = await prompt(`New name (current: ${combo.name}, press Enter to keep): `);
-  const editModels = await confirm("Edit model chain?");
-  
-  let newModels = combo.models;
-  
-  if (editModels) {
-    newModels = [];
-    
-    while (true) {
-      clearScreen();
-      console.log(`Editing combo: ${combo.name}`);
-      console.log(`Selected models (${newModels.length}):`);
-      
-      if (newModels.length > 0) {
-        newModels.forEach((m, i) => console.log(`  ${i + 1}. ${m}`));
-      } else {
-        console.log("  (none)");
-      }
-      
-      console.log("\nType 'done' to finish (min 2 models) or 'cancel' to abort\n");
-      
-      const model = await selectModelFromList("Add Model", "");
-      
-      if (model === null) {
-        showStatus("Cancelled", "warning");
-        await pause();
-        return;
-      }
-      
-      if (model === "done") {
-        if (newModels.length < 2) {
-          showStatus("Please select at least 2 models", "error");
-          await pause();
-          continue;
-        }
-        break;
-      }
-      
-      newModels.push(model);
-      showStatus(`Added: ${model}`, "success");
-      await pause();
-    }
-  }
-  
-  const updateData = {};
-  if (newName) updateData.name = newName;
-  if (editModels) updateData.models = newModels;
-  
-  if (Object.keys(updateData).length === 0) {
-    showStatus("No changes made", "warning");
-    await pause();
-    return;
-  }
-  
-  showStatus("Updating combo...", "info");
-  
-  const updateResult = await api.updateCombo(combo.id, updateData);
-  
-  if (!updateResult.success) {
-    showStatus(`Failed to update combo: ${updateResult.error}`, "error");
-    await pause();
-    return;
-  }
-  
-  showStatus("Combo updated successfully!", "success");
-  await pause();
-}
-
-/**
- * Delete combo - select which combo to delete
- */
-async function handleDeleteCombo(combos) {
-  if (combos.length === 0) {
-    showStatus("No combos available", "warning");
-    await pause();
-    return;
-  }
-  
-  let selectedCombo = null;
-  
-  await showMenuWithBack({
-    title: "🗑️  Select Combo to Delete",
-    items: combos.map(combo => ({
-      label: formatComboLabel(combo),
-      action: async () => {
-        selectedCombo = combo;
-        return false;
-      }
-    }))
-  });
-  
-  if (!selectedCombo) return;
-  
-  clearScreen();
-  showStatus(`Combo: ${selectedCombo.name}`, "warning");
-  const modelsDisplay = Array.isArray(selectedCombo.models) 
-    ? selectedCombo.models.map(formatModel).join(" → ") 
-    : "";
-  console.log(`Models: ${modelsDisplay}`);
-  console.log();
-  
-  const confirmed = await confirm("Are you sure you want to delete this combo?");
-  
-  if (!confirmed) {
-    showStatus("Cancelled", "info");
-    await pause();
-    return;
-  }
-  
-  showStatus("Deleting combo...", "info");
-  
-  const deleteResult = await api.deleteCombo(selectedCombo.id);
-  
-  if (!deleteResult.success) {
-    showStatus(`Failed to delete combo: ${deleteResult.error}`, "error");
-    await pause();
-    return;
-  }
-  
-  showStatus("Combo deleted successfully!", "success");
   await pause();
 }
 

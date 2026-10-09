@@ -15,6 +15,7 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { handleComboChat, getComboModelsFromData } from "open-sse/services/combo.js";
 import { getKeyAccessContext, enforceKeyAccessProvider } from "../services/keyAccess.js";
 import { assertPublicUrlResolved } from "@/shared/utils/ssrfGuard.js";
+import { resolveUnhealthyCfg } from "@/shared/utils/unhealthyStatuses.js";
 
 /**
  * Handle web fetch (URL extraction) request for the SSE/Next.js server.
@@ -101,12 +102,7 @@ export async function handleFetch(request) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[providerInput]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
-    const comboSpecific = comboStrategies[providerInput] || {};
-    const healthCfg = {
-      threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
-      resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
-      statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
-    };
+    const healthCfg = resolveUnhealthyCfg(comboStrategies[providerInput] || {}, settings);
     log.info("FETCH", `Combo "${providerInput}" with ${comboModels.length} providers (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,

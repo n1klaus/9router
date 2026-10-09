@@ -15,6 +15,7 @@ import { updateProviderCredentials, checkAndRefreshToken } from "../services/tok
 import { handleComboChat } from "open-sse/services/combo.js";
 import * as log from "../utils/logger.js";
 import { saveRequestUsage } from "@/lib/usageDb.js";
+import { resolveUnhealthyCfg } from "@/shared/utils/unhealthyStatuses.js";
 
 // Providers that don't require credentials (noAuth)
 const NO_AUTH_PROVIDERS = new Set(["sdwebui", "comfyui"]);
@@ -78,12 +79,7 @@ export async function handleImageGeneration(request) {
     const comboStrategies = settings.comboStrategies || {};
     const comboStrategy = comboStrategies[modelStr]?.fallbackStrategy || settings.comboStrategy || "fallback";
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
-    const comboSpecific = comboStrategies[modelStr] || {};
-    const healthCfg = {
-      threshold: comboSpecific.unhealthyThreshold ?? settings.comboUnhealthyThreshold,
-      resetMs: comboSpecific.unhealthyResetMs ?? settings.comboUnhealthyResetMs,
-      statuses: comboSpecific.unhealthyStatuses ?? settings.comboUnhealthyStatuses,
-    };
+    const healthCfg = resolveUnhealthyCfg(comboStrategies[modelStr] || {}, settings);
     log.info("IMAGE", `Combo "${modelStr}" with ${comboModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
       body,

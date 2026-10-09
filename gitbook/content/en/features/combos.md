@@ -537,37 +537,59 @@ persistently dead model stops slowing every request:
 Dashboard → Profile → Combo Unhealthy Skip:
   Failure threshold: 3
   Reset window: 24 hours
-  Counted error codes: 404, 401, 402, 403 (empty = all errors)
+  Counted error codes: 401, 402, 403, 404 (empty = all errors)
 ```
+
+These are the defaults. Skipping is on by default; set the boolean setting
+`comboUnhealthySkipEnabled` to `false` to turn the whole feature off
+server-side (default `true`). The statuses field accepts HTTP codes
+400-599, class markers (`4xx`, `5xx`) and the word `all` (count every
+error).
 
 **What counts as a failure**: a fallbackable attempt whose HTTP status is in
 the counted-error list. An empty list means every fallbackable error counts.
 Skipping only applies while falling through — a non-fallbackable error never
-counts against the model.
+counts against the model. An attempt that throws before producing a response
+(network/DNS failure) always counts.
 
-**Threshold semantics**: skips kick in after N *consecutive* failures that all
-fall inside the reset window. A lone old failure decays: if the failure streak
-started longer ago than the reset window, the next failure restarts the streak.
-A successful attempt on a model clears its streak immediately.
+**Threshold semantics**: skips kick in after N *consecutive* failures. Two
+failures belong to the same streak only if the second happened within one
+reset window of the previous one; a failure farther back than that restarts
+the streak at 1. A successful attempt on a model clears its streak immediately.
 
 **Reset semantics**: a skipped model is retried automatically once its window
-expires (lazy expiry on the next request). If *every* model is currently
+expires (lazy expiry on the next request), and a skip is never extended: it
+lasts at most one reset window from the moment the threshold was crossed,
+after which the model is probed again. If *every* model is currently
 skipped, the combo tries them all anyway — health state never hard-fails a
 request, it only reorders attempts.
+
+**Reset window input**: the dashboard takes whole minutes (1-1440). The CLI
+also accepts decimal minutes (e.g. `1.5` = 90 s) and rounds to milliseconds
+before saving — a known divergence between the two UIs; both store the value
+as whole milliseconds.
 
 **Per-combo overrides**: on the Combos page each card has an "Unhealthy skip"
 row writing `{ unhealthyThreshold, unhealthyResetMs, unhealthyStatuses }`
 into that combo's strategy entry. Empty fields inherit the global values;
 typing `all` in the statuses field means the explicit empty list (count every
-error) rather than inherit.
+error) rather than inherit. Fields accept the same tokens as the global card
+(codes, `4xx`/`5xx`, `all`).
+
+Fusion combos are exempt: every panel model is always queried, so unhealthy
+skip applies to fallback and round-robin combos only.
 
 **In-memory caveat**: health state lives in the server process and resets on
-restart, like combo rotation state. Account-level per-model locks (failures
-that trigger provider backoff) are stored separately and survive restarts.
+restart, like combo rotation state. Each server process keeps its own skip
+state, so a multi-process deployment does not share it. Account-level
+per-model locks (failures that trigger provider backoff) are stored
+separately and survive restarts.
 
-**CLI**: `Settings` menu → the three "Combo unhealthy" items for the globals;
-`Combos` → a combo → `Edit Combo` for per-combo overrides (Enter = keep,
-`-` = inherit global, `all` = every error).
+**CLI**: `Settings` menu → the "Combo unhealthy skip" toggle (shows ON/OFF and
+flips `comboUnhealthySkipEnabled`) plus the three "Combo unhealthy" items for
+the globals; `Combos` → a combo → `Edit Combo` for per-combo overrides (Enter
+= keep, `-` = inherit global, `all` = every error). Statuses accept codes,
+4xx/5xx markers, or `all`; invalid values are rejected and the stored list kept.
 
 ---
 

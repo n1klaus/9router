@@ -1,5 +1,6 @@
 import { getAdapter } from "../driver.js";
 import { parseJson, stringifyJson } from "../helpers/jsonCol.js";
+import { DEFAULT_UNHEALTHY_STATUSES, isValidResetMs, isValidThreshold, normalizeStatusesList, sanitizeUnhealthyOverrides } from "@/shared/utils/unhealthyStatuses.js";
 
 const DEFAULT_MITM_ROUTER_BASE = "http://localhost:20128";
 const DEFAULT_HEADROOM_URL = process.env.HEADROOM_URL || "http://localhost:8787";
@@ -17,9 +18,12 @@ const DEFAULT_SETTINGS = {
   comboStrategy: "fallback",
   comboStickyRoundRobinLimit: 1,
   comboStrategies: {},
+  comboUnhealthySkipEnabled: true,
   comboUnhealthyThreshold: 3,
   comboUnhealthyResetMs: 24 * 60 * 60 * 1000,
-  comboUnhealthyStatuses: [404, 401, 402, 403],
+  // Copy, not reference: mergeWithDefaults hands this value out to callers, and
+  // an in-place push/sort on a shared array would corrupt the constant.
+  comboUnhealthyStatuses: [...DEFAULT_UNHEALTHY_STATUSES],
   capacityAdapter: {
     vision: { enabled: true, roundRobin: false, models: [] },
     pdf: { enabled: false, roundRobin: false, models: [] },
@@ -78,6 +82,10 @@ async function readRaw() {
 // Merge raw settings with defaults; backward-compat for missing keys
 export function mergeWithDefaults(raw) {
   const merged = { ...DEFAULT_SETTINGS, ...(raw || {}) };
+  // Deep-copy the nested capacityAdapter value: the per-entry models mapping
+  // below assigns entry.models in place, and a shared reference to
+  // DEFAULT_SETTINGS.capacityAdapter would corrupt the constant.
+  merged.capacityAdapter = JSON.parse(JSON.stringify(merged.capacityAdapter ?? {}));
   for (const [key, defVal] of Object.entries(DEFAULT_SETTINGS)) {
     if (merged[key] === undefined) {
       if (
@@ -90,6 +98,32 @@ export function mergeWithDefaults(raw) {
         merged[key] = defVal;
       }
     }
+  }
+  // Unhealthy-skip keys: coerce stored garbage (null, "", 0, wrong types) to the
+  // defaults on read, so GET and the runtime resolver never disagree.
+  if (!isValidThreshold(merged.comboUnhealthyThreshold)) merged.comboUnhealthyThreshold = DEFAULT_SETTINGS.comboUnhealthyThreshold;
+  if (!isValidResetMs(merged.comboUnhealthyResetMs)) merged.comboUnhealthyResetMs = DEFAULT_SETTINGS.comboUnhealthyResetMs;
+  const normalizedUnhealthyStatuses = normalizeStatusesList(merged.comboUnhealthyStatuses);
+  merged.comboUnhealthyStatuses = normalizedUnhealthyStatuses === null
+    ? [...DEFAULT_SETTINGS.comboUnhealthyStatuses]
+    : normalizedUnhealthyStatuses;
+  // Enable switch: coerce stored garbage (null, "", 0, wrong types) to enabled,
+  // the default, on read.
+  if (typeof merged.comboUnhealthySkipEnabled !== "boolean") merged.comboUnhealthySkipEnabled = true;
+  // Per-combo overrides: drop unhealthy fields that fail validation (legacy/
+  // direct-DB data) so GET and the runtime resolver never disagree. Rebuild the
+  // map instead of mutating entries: merged.comboStrategies may be the shared
+  // DEFAULT_SETTINGS object or the caller's raw input.
+  if (!merged.comboStrategies || typeof merged.comboStrategies !== "object" || Array.isArray(merged.comboStrategies)) {
+    merged.comboStrategies = {};
+  } else {
+    const strategies = {};
+    for (const [name, entry] of Object.entries(merged.comboStrategies)) {
+      strategies[name] = entry && typeof entry === "object" && !Array.isArray(entry)
+        ? sanitizeUnhealthyOverrides(entry)
+        : entry;
+    }
+    merged.comboStrategies = strategies;
   }
   if (merged.capacityAdapter && typeof merged.capacityAdapter === "object") {
     for (const capKey of Object.keys(merged.capacityAdapter)) {

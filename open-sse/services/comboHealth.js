@@ -1,21 +1,40 @@
-import { matchesStatusClasses } from "../../src/shared/utils/unhealthyStatuses.js";
+import { DEFAULT_UNHEALTHY_STATUSES, matchesStatusClasses, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX, UNHEALTHY_RESET_MS_MIN, UNHEALTHY_RESET_MS_MAX } from "../../src/shared/utils/unhealthyStatuses.js";
 
 /**
  * Combo unhealthy-model skip: sticky in-memory failure memory per combo/model.
- * Skip after N consecutive failures (within a reset window); re-admit lazily
- * after the window; success clears the streak. In-memory only — resets on
- * restart, like combo rotation state.
+ * Skip after N consecutive failures (each within one reset window of the previous);
+ * a skip lasts at most one reset window; success clears the streak. In-memory only —
+ * per server process (multi-process deployments keep independent state), like combo
+ * rotation state.
  */
 
-const healthByCombo = new Map(); // comboName -> Map(modelStr -> { failures, firstFailureAt, skippedUntil })
+const healthByCombo = new Map(); // comboName -> Map(modelStr -> { failures, lastFailureAt, skippedUntil })
+
+function normalizeStatuses(raw) {
+  if (!Array.isArray(raw)) return DEFAULT_UNHEALTHY_STATUSES;
+  if (raw.length === 0) return []; // explicit empty list = count every error
+  const sanitized = raw
+    .map((s) => (s === "4xx" || s === "5xx" ? s : Number(s)))
+    .filter((s) => s === "4xx" || s === "5xx" || (Number.isInteger(s) && s >= 400 && s < 600));
+  // A non-empty list that sanitizes to nothing is corrupt (e.g. legacy junk like
+  // [99]). Silently returning [] would widen the filter to "count every error";
+  // fall back to the defaults instead. Partially valid lists keep the valid part.
+  return sanitized.length ? sanitized : DEFAULT_UNHEALTHY_STATUSES;
+}
+
+// Runtime bounds mirror the validator: floor positive numbers, then clamp into
+// the valid range; non-finite/non-positive values fall back to the default.
+function clampInt(value, min, max, fallback) {
+  const n = Math.floor(+value);
+  if (!Number.isFinite(n) || n <= 0) return fallback;
+  return Math.min(max, Math.max(min, n));
+}
 
 function normalizeCfg(cfg = {}) {
-  const threshold = Math.floor(+cfg.threshold);
-  const resetMs = +cfg.resetMs;
   return {
-    threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 3,
-    resetMs: Number.isFinite(resetMs) && resetMs > 0 ? resetMs : 24 * 60 * 60 * 1000,
-    statuses: Array.isArray(cfg.statuses) ? cfg.statuses.map((s) => (s === "4xx" || s === "5xx" ? s : Number(s))).filter((s) => s === "4xx" || s === "5xx" || Number.isFinite(s)) : [],
+    threshold: clampInt(cfg.threshold, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX, 3),
+    resetMs: clampInt(cfg.resetMs, UNHEALTHY_RESET_MS_MIN, UNHEALTHY_RESET_MS_MAX, 24 * 60 * 60 * 1000),
+    statuses: normalizeStatuses(cfg.statuses),
   };
 }
 
@@ -29,8 +48,14 @@ function comboMap(name, create = false) {
   return m;
 }
 
-/** Empty status list = count every fallbackable failure. */
+/**
+ * Empty status list = matches every status. A null status means the
+ * attempt threw before producing a response (transport failure): it always counts.
+ * NOTE: fallbackability itself is gated by the caller in combo.js via checkFallbackError;
+ * this function only checks status classes.
+ */
 export function shouldCount(status, cfg = {}) {
+  if (status === null) return true;
   const { statuses } = normalizeCfg(cfg);
   return matchesStatusClasses(status, statuses);
 }
@@ -41,11 +66,12 @@ export function recordComboFailure(comboName, modelStr, status, cfg = {}) {
   const m = comboMap(comboName, true);
   const now = Date.now();
   const prev = m.get(modelStr);
-  // Window-decayed streak: failures farther apart than resetMs start a new streak.
-  const entry = prev && now - prev.firstFailureAt <= c.resetMs
-    ? { failures: prev.failures + 1, firstFailureAt: prev.firstFailureAt, skippedUntil: prev.skippedUntil }
-    : { failures: 1, firstFailureAt: now, skippedUntil: 0 };
-  if (entry.failures >= c.threshold) entry.skippedUntil = now + c.resetMs;
+  // Streak decays when the previous failure is farther back than one reset window.
+  const entry = prev && now - prev.lastFailureAt <= c.resetMs
+    ? { failures: prev.failures + 1, lastFailureAt: now, skippedUntil: prev.skippedUntil }
+    : { failures: 1, lastFailureAt: now, skippedUntil: 0 };
+  // Set the window once, at the crossing: a skip never outlives one reset window.
+  if (entry.failures >= c.threshold && !entry.skippedUntil) entry.skippedUntil = now + c.resetMs;
   m.set(modelStr, entry);
 }
 
@@ -57,16 +83,16 @@ export function getSkippedModels(comboName, models, cfg = {}) {
   const c = normalizeCfg(cfg);
   const m = comboMap(comboName);
   if (!m) return [];
+  const members = Array.isArray(models) ? new Set(models) : null;
   const now = Date.now();
-  return (models || []).filter((s) => {
-    const e = m.get(s);
-    if (!e) return false;
-    if (e.skippedUntil && e.skippedUntil > now) return true;
-    // Lazy cleanup: expired skip windows and stale sub-threshold streaks.
-    if (e.skippedUntil && e.skippedUntil <= now) { m.delete(s); return false; }
-    if (now - e.firstFailureAt > c.resetMs) { m.delete(s); return false; }
-    return false;
-  });
+  const skipped = [];
+  for (const [model, e] of m) {
+    if (members && !members.has(model)) { m.delete(model); continue; } // model left the combo
+    if (e.skippedUntil && e.skippedUntil > now) skipped.push(model);
+    else if (e.skippedUntil) m.delete(model);                          // expired skip window
+    else if (now - e.lastFailureAt > c.resetMs) m.delete(model);       // stale sub-threshold streak
+  }
+  return skipped;
 }
 
 export function resetComboHealth(comboName) {
