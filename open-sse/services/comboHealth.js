@@ -49,8 +49,10 @@ function comboMap(name, create = false) {
 }
 
 /**
- * Empty status list = count every fallbackable failure. A null status means the
+ * Empty status list = matches every status. A null status means the
  * attempt threw before producing a response (transport failure): it always counts.
+ * NOTE: fallbackability itself is gated by the caller in combo.js via checkFallbackError;
+ * this function only checks status classes.
  */
 export function shouldCount(status, cfg = {}) {
   if (status === null) return true;
