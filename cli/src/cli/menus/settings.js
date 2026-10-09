@@ -88,12 +88,21 @@ async function showSettingsMenu(breadcrumb = []) {
         action: async (d) => { await setComboUnhealthyThreshold(d?.settings?.comboUnhealthyThreshold ?? 3); return true; }
       },
       {
-        label: (d) => `Combo unhealthy: reset window (current ${Math.round((d?.settings?.comboUnhealthyResetMs ?? 86400000) / 60000)} min)`,
+        label: (d) => {
+          const ms = d?.settings?.comboUnhealthyResetMs ?? 86400000;
+          const shown = ms % 60000 === 0 ? `${ms / 60000} min` : `${(ms / 60000).toFixed(2).replace(/\.?0+$/, "")} min (${ms} ms)`;
+          return `Combo unhealthy: reset window (current ${shown})`;
+        },
         action: async (d) => { await setComboUnhealthyReset(d?.settings?.comboUnhealthyResetMs ?? 86400000); return true; }
       },
       {
-        label: (d) => `Combo unhealthy: status codes (current ${(d?.settings?.comboUnhealthyStatuses ?? []).join(",") || "all"})`,
-        action: async (d) => { await setComboUnhealthyStatuses(d?.settings?.comboUnhealthyStatuses ?? []); return true; }
+        label: (d) => {
+          const statuses = Array.isArray(d?.settings?.comboUnhealthyStatuses)
+            ? d.settings.comboUnhealthyStatuses
+            : [401, 402, 403, 404]; // server default when settings value missing
+          return `Combo unhealthy: status codes (current ${statuses.join(",") || "all"})`;
+        },
+        action: async (d) => { await setComboUnhealthyStatuses(Array.isArray(d?.settings?.comboUnhealthyStatuses) ? d.settings.comboUnhealthyStatuses : [401, 402, 403, 404]); return true; }
       },
       {
         label: "🔑 Reset Password to Default",
@@ -216,17 +225,20 @@ async function setComboUnhealthyThreshold(current) {
  * @param {number} currentMs - Current reset window in ms
  */
 async function setComboUnhealthyReset(currentMs) {
-  const currentMin = Math.round(currentMs / 60000);
-  const raw = ((await prompt(`Reset window minutes 1-1440 (current ${currentMin}, Enter to keep): `)) || "").trim();
+  // The server accepts any whole number of milliseconds in [60s, 24h]; the CLI
+  // prompts in minutes but accepts decimals so sub-minute values are preserved.
+  const fmt = (ms) => (ms % 60000 === 0 ? `${ms / 60000} min` : `${(ms / 60000).toFixed(2).replace(/\.?0+$/, "")} min (${ms} ms)`);
+  const raw = ((await prompt(`Reset window minutes 1-1440, decimals allowed e.g. 1.5 = 90s (current ${fmt(currentMs)}, Enter to keep): `)) || "").trim();
   if (raw === "") { showStatus("Kept current reset window", "info"); await pause(); return; }
   const minutes = Number(raw);
-  if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
+  const ms = Math.round(minutes * 60000);
+  if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440 || !Number.isInteger(ms) || ms < 60000 || ms > 86400000) {
     showStatus(`Invalid reset window "${raw}" (1-1440 minutes) — kept current`, "error");
     await pause();
     return;
   }
-  const result = await api.updateSettings({ comboUnhealthyResetMs: minutes * 60000 });
-  if (result.success) showStatus(`Combo unhealthy reset window set to ${minutes} min`, "success");
+  const result = await api.updateSettings({ comboUnhealthyResetMs: ms });
+  if (result.success) showStatus(`Combo unhealthy reset window set to ${fmt(ms)}`, "success");
   else showStatus(`Failed: ${result.error}`, "error");
   await pause();
 }

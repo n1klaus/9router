@@ -9,8 +9,8 @@ function parseStatusesCsv(text) {
   const t = (text || "").trim();
   if (t === "") return null;
   if (t.toLowerCase() === "all") return [];
+  if (/^[,;]/.test(t) || /[,;]$/.test(t) || /[,;]\s*[,;]/.test(t)) return null;
   const tokens = t.split(/[,;\s]+/).filter(Boolean);
-  if (tokens.length === 0) return null;
   const markers = [];
   const codes = [];
   for (const token of tokens) {

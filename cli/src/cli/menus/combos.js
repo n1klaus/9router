@@ -17,6 +17,7 @@ function formatModel(model) {
   return String(model);
 }
 
+
 /**
  * Show actions for a specific combo
  * @param {Object} combo - Combo object
@@ -49,6 +50,7 @@ async function showComboActions(combo, breadcrumb = []) {
     ]
   });
 }
+
 
 /**
  * Handle editing a single combo
@@ -109,19 +111,20 @@ async function handleEditSingleCombo(combo) {
       } else showStatus(`Invalid threshold "${thRaw}" (1-20) — kept current`, "error");
     }
 
-    const resetGlobalMin = Math.round((settingsData.comboUnhealthyResetMs ?? 86400000) / 60000);
-    const resetRaw = ((await prompt(`  Reset minutes 1-1440 (global ${resetGlobalMin}): `)) || "").trim();
+    const gMs = settingsData.comboUnhealthyResetMs ?? 86400000;
+    const resetGlobalLabel = gMs % 60000 === 0 ? `${gMs / 60000}` : `${(gMs / 60000).toFixed(2).replace(/\.?0+$/, "")} (${gMs} ms)`;
+    const resetRaw = ((await prompt(`  Reset minutes 1-1440, decimals allowed e.g. 1.5 = 90s (global ${resetGlobalLabel}): `)) || "").trim();
     if (resetRaw === "-") {
       if ("unhealthyResetMs" in override) { delete override.unhealthyResetMs; changed = true; }
     } else if (resetRaw !== "") {
       const minutes = Number(resetRaw);
-      if (Number.isInteger(minutes) && minutes >= 1 && minutes <= 1440) {
-        const ms = minutes * 60000;
+      const ms = Math.round(minutes * 60000);
+      if (Number.isFinite(minutes) && minutes >= 1 && minutes <= 1440 && Number.isInteger(ms) && ms >= 60000 && ms <= 86400000) {
         if (override.unhealthyResetMs !== ms) { override.unhealthyResetMs = ms; changed = true; }
       } else showStatus(`Invalid reset window "${resetRaw}" (1-1440 minutes) — kept current`, "error");
     }
 
-    const statusesGlobal = Array.isArray(settingsData.comboUnhealthyStatuses) ? settingsData.comboUnhealthyStatuses : [];
+    const statusesGlobal = Array.isArray(settingsData.comboUnhealthyStatuses) ? settingsData.comboUnhealthyStatuses : [401, 402, 403, 404]; // server default when missing
     const curStatuses = Array.isArray(override.unhealthyStatuses) ? override.unhealthyStatuses : undefined;
     const statusesLabel = curStatuses === undefined
       ? `global ${statusesGlobal.join(",") || "all"}`
@@ -135,13 +138,20 @@ async function handleEditSingleCombo(combo) {
       else if (JSON.stringify(parsed) !== JSON.stringify(curStatuses ?? null)) { override.unhealthyStatuses = parsed; changed = true; }
     }
 
+    // On rename collision (target already has an entry, e.g. concurrent edit),
+    // merge instead of clobbering: target keys win, carried keys fill the gaps.
+    const targetEntry = name !== combo.name ? comboStrategies[name] : undefined;
+    const merged = targetEntry && typeof targetEntry === "object" && !Array.isArray(targetEntry)
+      ? { ...override, ...targetEntry }
+      : override;
+
     // Skip the PATCH when nothing changed: writing comboStrategies resets the
     // server's in-memory health state for every combo.
     if (changed || (name !== combo.name && Object.prototype.hasOwnProperty.call(comboStrategies, combo.name))) {
       if (name !== combo.name) delete comboStrategies[combo.name];
-      if (!override.fallbackStrategy || override.fallbackStrategy === "fallback") delete override.fallbackStrategy;
-      if (Object.keys(override).length === 0) delete comboStrategies[name];
-      else comboStrategies[name] = override;
+      if (!merged.fallbackStrategy || merged.fallbackStrategy === "fallback") delete merged.fallbackStrategy;
+      if (Object.keys(merged).length === 0) delete comboStrategies[name];
+      else comboStrategies[name] = merged;
       const strategySync = await api.updateSettings({ comboStrategies });
       if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
     }
@@ -156,6 +166,7 @@ async function handleEditSingleCombo(combo) {
   }
   await pause();
 }
+
 
 /**
  * Handle deleting a single combo
@@ -173,6 +184,7 @@ async function handleDeleteSingleCombo(combo) {
     await pause();
   }
 }
+
 
 /**
  * Main combos menu - list all combos and actions
@@ -213,6 +225,7 @@ async function showCombosMenu(breadcrumb = []) {
     }
   });
 }
+
 
 /**
  * Show combo detail with stats
@@ -255,6 +268,7 @@ async function showComboDetail(comboId) {
   await pause();
 }
 
+
 /**
  * Format combo for menu display
  */
@@ -266,6 +280,7 @@ function formatComboLabel(combo) {
     : modelsChain;
   return `${combo.name}: ${displayModels}`;
 }
+
 
 /**
  * Create new combo
@@ -375,164 +390,6 @@ async function handleCreateCombo() {
   }
   
   showStatus(`Combo "${name}" created successfully!`, "success");
-  await pause();
-}
-
-/**
- * Edit combo - select which combo to edit
- */
-async function handleEditCombo(combos) {
-  if (combos.length === 0) {
-    showStatus("No combos available", "warning");
-    await pause();
-    return;
-  }
-  
-  let selectedCombo = null;
-  
-  await showMenuWithBack({
-    title: "✏️  Select Combo to Edit",
-    items: combos.map(combo => ({
-      label: formatComboLabel(combo),
-      action: async () => {
-        selectedCombo = combo;
-        return false;
-      }
-    }))
-  });
-  
-  if (!selectedCombo) return;
-  await editSingleCombo(selectedCombo);
-}
-
-/**
- * Edit a single combo
- */
-async function editSingleCombo(combo) {
-  clearScreen();
-  showStatus(`Editing combo: ${combo.name}`, "info");
-  console.log();
-  
-  const newName = await prompt(`New name (current: ${combo.name}, press Enter to keep): `);
-  const editModels = await confirm("Edit model chain?");
-  
-  let newModels = combo.models;
-  
-  if (editModels) {
-    newModels = [];
-    
-    while (true) {
-      clearScreen();
-      console.log(`Editing combo: ${combo.name}`);
-      console.log(`Selected models (${newModels.length}):`);
-      
-      if (newModels.length > 0) {
-        newModels.forEach((m, i) => console.log(`  ${i + 1}. ${m}`));
-      } else {
-        console.log("  (none)");
-      }
-      
-      console.log("\nType 'done' to finish (min 2 models) or 'cancel' to abort\n");
-      
-      const model = await selectModelFromList("Add Model", "");
-      
-      if (model === null) {
-        showStatus("Cancelled", "warning");
-        await pause();
-        return;
-      }
-      
-      if (model === "done") {
-        if (newModels.length < 2) {
-          showStatus("Please select at least 2 models", "error");
-          await pause();
-          continue;
-        }
-        break;
-      }
-      
-      newModels.push(model);
-      showStatus(`Added: ${model}`, "success");
-      await pause();
-    }
-  }
-  
-  const updateData = {};
-  if (newName) updateData.name = newName;
-  if (editModels) updateData.models = newModels;
-  
-  if (Object.keys(updateData).length === 0) {
-    showStatus("No changes made", "warning");
-    await pause();
-    return;
-  }
-  
-  showStatus("Updating combo...", "info");
-  
-  const updateResult = await api.updateCombo(combo.id, updateData);
-  
-  if (!updateResult.success) {
-    showStatus(`Failed to update combo: ${updateResult.error}`, "error");
-    await pause();
-    return;
-  }
-  
-  showStatus("Combo updated successfully!", "success");
-  await pause();
-}
-
-/**
- * Delete combo - select which combo to delete
- */
-async function handleDeleteCombo(combos) {
-  if (combos.length === 0) {
-    showStatus("No combos available", "warning");
-    await pause();
-    return;
-  }
-  
-  let selectedCombo = null;
-  
-  await showMenuWithBack({
-    title: "🗑️  Select Combo to Delete",
-    items: combos.map(combo => ({
-      label: formatComboLabel(combo),
-      action: async () => {
-        selectedCombo = combo;
-        return false;
-      }
-    }))
-  });
-  
-  if (!selectedCombo) return;
-  
-  clearScreen();
-  showStatus(`Combo: ${selectedCombo.name}`, "warning");
-  const modelsDisplay = Array.isArray(selectedCombo.models) 
-    ? selectedCombo.models.map(formatModel).join(" → ") 
-    : "";
-  console.log(`Models: ${modelsDisplay}`);
-  console.log();
-  
-  const confirmed = await confirm("Are you sure you want to delete this combo?");
-  
-  if (!confirmed) {
-    showStatus("Cancelled", "info");
-    await pause();
-    return;
-  }
-  
-  showStatus("Deleting combo...", "info");
-  
-  const deleteResult = await api.deleteCombo(selectedCombo.id);
-  
-  if (!deleteResult.success) {
-    showStatus(`Failed to delete combo: ${deleteResult.error}`, "error");
-    await pause();
-    return;
-  }
-  
-  showStatus("Combo deleted successfully!", "success");
   await pause();
 }
 

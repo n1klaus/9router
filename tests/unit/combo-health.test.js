@@ -4,6 +4,7 @@ import {
   recordComboSuccess,
   getSkippedModels,
   resetComboHealth,
+  shouldCount,
 } from "../../open-sse/services/comboHealth.js";
 
 const CFG = { threshold: 3, resetMs: 600000, statuses: [] };
@@ -139,5 +140,56 @@ describe("comboHealth", () => {
     expect(getSkippedModels("C", ["p/404"], { threshold: 1 })).toEqual(["p/404"]);
     recordComboFailure("C", "p/any", 503, { threshold: 1, statuses: [] });
     expect(getSkippedModels("C", ["p/any"], { threshold: 1, statuses: [] })).toEqual(["p/any"]);
+  });
+
+  it("falls back to default statuses when a configured list is corrupt", () => {
+    const cfg = { threshold: 1, statuses: [99] };
+    expect(shouldCount(500, cfg)).toBe(false);
+    recordComboFailure("C", "p/500", 500, cfg);
+    expect(getSkippedModels("C", ["p/500"], cfg)).toEqual([]);
+    recordComboFailure("C", "p/404", 404, cfg);
+    expect(getSkippedModels("C", ["p/404"], cfg)).toEqual(["p/404"]);
+  });
+
+  it("keeps explicit empty statuses counting every fallbackable error", () => {
+    const cfg = { threshold: 1, statuses: [] };
+    recordComboFailure("C", "p/500", 500, cfg);
+    expect(getSkippedModels("C", ["p/500"], cfg)).toEqual(["p/500"]);
+  });
+
+  it("counts a status covered by a class and code only once", () => {
+    const cfg = { threshold: 2, statuses: ["4xx", 404] };
+    recordComboFailure("C", "p/m1", 404, cfg);
+    expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual([]);
+    recordComboFailure("C", "p/m1", 404, cfg);
+    expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual(["p/m1"]);
+  });
+
+  it("defaults omitted threshold and reset window", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+      const cfg = { statuses: [] };
+      recordComboFailure("C", "p/m1", 404, cfg);
+      recordComboFailure("C", "p/m1", 404, cfg);
+      expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual([]);
+      recordComboFailure("C", "p/m1", 404, cfg);
+      expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual(["p/m1"]);
+      vi.advanceTimersByTime(600001);
+      expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual(["p/m1"]);
+      vi.advanceTimersByTime(86400000);
+      expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("success clears a skipped model", () => {
+    const cfg = { threshold: 2, statuses: [] };
+    recordComboFailure("C", "p/m1", 404, cfg);
+    recordComboFailure("C", "p/m1", 404, cfg);
+    expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual(["p/m1"]);
+    recordComboSuccess("C", "p/m1");
+    expect(getSkippedModels("C", ["p/m1"], cfg)).toEqual([]);
   });
 });

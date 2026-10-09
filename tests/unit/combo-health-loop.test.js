@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { handleComboChat, resetComboRotation } from "../../open-sse/services/combo.js";
+import { handleComboChat, handleFusionChat, resetComboRotation } from "../../open-sse/services/combo.js";
 import { recordComboFailure, resetComboHealth } from "../../open-sse/services/comboHealth.js";
 
 const CFG = { threshold: 3, resetMs: 86400000, statuses: [] };
@@ -153,5 +153,26 @@ describe("handleComboChat unhealthy skip", () => {
     expect(first.calls).toEqual(["p/503", "p/live"]);
     const second = await runStatus(["p/503", "p/live"], cfg, statusFor);
     expect(second.calls).toEqual(["p/503", "p/live"]); // 503 is not counted under [404]
+  });
+
+  it("queries every fusion panel despite unhealthy streaks", async () => {
+    const models = ["p/a", "p/b", "p/c"];
+    const cfg = { threshold: 1, resetMs: 86400000, statuses: [404] };
+    for (const model of models) recordComboFailure("C", model, 404, cfg);
+
+    const calls = [];
+    await handleFusionChat({
+      body: { messages: [{ role: "user", content: "hi" }] },
+      models,
+      handleSingleModel: async (body, model, isPanel) => {
+        calls.push({ model, isPanel });
+        return live();
+      },
+      log: noopLog,
+      comboName: "C",
+      comboStrategy: "fusion",
+    });
+
+    expect(calls.filter(({ isPanel }) => isPanel).map(({ model }) => model).sort()).toEqual(models.slice().sort());
   });
 });

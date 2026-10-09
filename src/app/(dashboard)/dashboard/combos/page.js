@@ -69,6 +69,14 @@ export default function CombosPage() {
   const setComboStrategyError = (comboName, message) => {
     setStrategyError((prev) => ({ ...prev, [comboName]: message }));
   };
+  // Serialize strategy writes so concurrent save/delete/bulk ops cannot interleave
+  // PATCHes built from different ref snapshots.
+  const strategyQueue = useRef(Promise.resolve());
+  const queueStrategyWrite = (run) => {
+    const task = strategyQueue.current.then(run);
+    strategyQueue.current = task.catch(() => {}); // keep the chain alive after a failure
+    return task;
+  };
   const [capacityAdapter, setCapacityAdapter] = useState(EMPTY_CAPACITY_ADAPTER);
   const { getCaps } = useModelCaps();
   const [confirmState, setConfirmState] = useState(null);

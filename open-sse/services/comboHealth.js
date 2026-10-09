@@ -10,17 +10,25 @@ import { DEFAULT_UNHEALTHY_STATUSES, matchesStatusClasses } from "../../src/shar
 
 const healthByCombo = new Map(); // comboName -> Map(modelStr -> { failures, lastFailureAt, skippedUntil })
 
+function normalizeStatuses(raw) {
+  if (!Array.isArray(raw)) return DEFAULT_UNHEALTHY_STATUSES;
+  if (raw.length === 0) return []; // explicit empty list = count every error
+  const sanitized = raw
+    .map((s) => (s === "4xx" || s === "5xx" ? s : Number(s)))
+    .filter((s) => s === "4xx" || s === "5xx" || (Number.isInteger(s) && s >= 400 && s < 600));
+  // A non-empty list that sanitizes to nothing is corrupt (e.g. legacy junk like
+  // [99]). Silently returning [] would widen the filter to "count every error";
+  // fall back to the defaults instead. Partially valid lists keep the valid part.
+  return sanitized.length ? sanitized : DEFAULT_UNHEALTHY_STATUSES;
+}
+
 function normalizeCfg(cfg = {}) {
   const threshold = Math.floor(+cfg.threshold);
   const resetMs = +cfg.resetMs;
   return {
     threshold: Number.isFinite(threshold) && threshold > 0 ? threshold : 3,
     resetMs: Number.isFinite(resetMs) && resetMs > 0 ? resetMs : 24 * 60 * 60 * 1000,
-    statuses: Array.isArray(cfg.statuses)
-      ? cfg.statuses
-          .map((s) => (s === "4xx" || s === "5xx" ? s : Number(s)))
-          .filter((s) => s === "4xx" || s === "5xx" || (Number.isInteger(s) && s >= 400 && s < 600))
-      : DEFAULT_UNHEALTHY_STATUSES,
+    statuses: normalizeStatuses(cfg.statuses),
   };
 }
 

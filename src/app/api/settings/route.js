@@ -42,6 +42,7 @@ export async function PATCH(request) {
     const body = await request.json();
 
     // Strip protected secrets before any internal handling sets them
+    for (const key of PROTECTED_SETTING_KEYS) delete body[key];
 
     // Reject invalid unhealthy-skip values instead of persisting them. The UI and
     // CLI clamp/validate first, so a rejection means a non-UI caller sent garbage.

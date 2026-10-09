@@ -63,9 +63,11 @@ export async function PUT(request, { params }) {
       const comboStrategies = { ...(settings.comboStrategies || {}) };
       if (Object.prototype.hasOwnProperty.call(comboStrategies, prev.name)) {
         const carried = sanitizeUnhealthyOverrides(comboStrategies[prev.name]);
+        // On a collision (e.g. concurrent rename onto an existing name) merge
+        // instead of dropping: target keys win, carried keys fill the gaps.
         comboStrategies[combo.name] = comboStrategies[combo.name] === undefined
           ? carried
-          : sanitizeUnhealthyOverrides(comboStrategies[combo.name]);
+          : { ...carried, ...sanitizeUnhealthyOverrides(comboStrategies[combo.name]) };
         delete comboStrategies[prev.name];
         await updateSettings({ comboStrategies });
       }

@@ -51,7 +51,14 @@ export default function ProfilePage() {
   const [unhealthyErrors, setUnhealthyErrors] = useState({}); // field -> message
   const setUnhealthyError = (field, message) => setUnhealthyErrors((prev) => ({ ...prev, [field]: message }));
   const settingsRef = useRef({});
-  const applySettings = (next) => { settingsRef.current = next; setSettings(next); };
+  const applySettings = (next) => {
+    // Accepts a value or an updater; updaters build from the ref, so every writer
+    // (not just the unhealthy paths) keeps settingsRef in sync and later saves
+    // cannot clobber intermediate changes with a stale snapshot.
+    const value = typeof next === "function" ? next(settingsRef.current) : next;
+    settingsRef.current = value;
+    setSettings(value);
+  };
   const settingsQueue = useRef(Promise.resolve());
   const queueSettingsWrite = (run) => {
     const task = settingsQueue.current.then(run);
@@ -160,7 +167,7 @@ export default function ProfilePage() {
 
       const data = await res.json();
       if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
+        applySettings((prev) => ({ ...prev, ...data }));
         setProxyStatus({ type: "success", message: "Proxy settings applied" });
       } else {
         setProxyStatus({ type: "error", message: data.error || "Failed to update proxy settings" });
@@ -223,7 +230,7 @@ export default function ProfilePage() {
 
       const data = await res.json();
       if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
+        applySettings((prev) => ({ ...prev, ...data }));
         setProxyForm((prev) => ({ ...prev, outboundProxyEnabled: data?.outboundProxyEnabled === true }));
         setProxyStatus({
           type: "success",
@@ -282,7 +289,7 @@ export default function ProfilePage() {
         body: JSON.stringify({ fallbackStrategy: strategy }),
       });
       if (res.ok) {
-        setSettings(prev => ({ ...prev, fallbackStrategy: strategy }));
+        applySettings(prev => ({ ...prev, fallbackStrategy: strategy }));
       }
     } catch (err) {
       console.error("Failed to update settings:", err);
@@ -297,7 +304,7 @@ export default function ProfilePage() {
         body: JSON.stringify({ comboStrategy: strategy }),
       });
       if (res.ok) {
-        setSettings(prev => ({ ...prev, comboStrategy: strategy }));
+        applySettings(prev => ({ ...prev, comboStrategy: strategy }));
       }
     } catch (err) {
       console.error("Failed to update combo strategy:", err);
@@ -315,7 +322,7 @@ export default function ProfilePage() {
         body: JSON.stringify({ stickyRoundRobinLimit: numLimit }),
       });
       if (res.ok) {
-        setSettings(prev => ({ ...prev, stickyRoundRobinLimit: numLimit }));
+        applySettings(prev => ({ ...prev, stickyRoundRobinLimit: numLimit }));
       }
     } catch (err) {
       console.error("Failed to update sticky limit:", err);
@@ -333,7 +340,7 @@ export default function ProfilePage() {
         body: JSON.stringify({ comboStickyRoundRobinLimit: numLimit }),
       });
       if (res.ok) {
-        setSettings(prev => ({ ...prev, comboStickyRoundRobinLimit: numLimit }));
+        applySettings(prev => ({ ...prev, comboStickyRoundRobinLimit: numLimit }));
       }
     } catch (err) {
       console.error("Failed to update combo sticky limit:", err);
@@ -362,7 +369,14 @@ export default function ProfilePage() {
   // Blur commits. Empty boxes are rejected with a message: the global card has no
   // "inherit" state, only concrete values.
   const commitUnhealthyThreshold = (text) => {
-    const n = Number((text || "").trim());
+    const trimmed = (text || "").trim();
+    // Digits only: Number() would accept "0x10" or "5e1", which the strict
+    // server-side parser treats differently.
+    if (!/^\d+$/.test(trimmed)) {
+      setUnhealthyError("threshold", `Threshold must be a whole number from ${UNHEALTHY_THRESHOLD_MIN} to ${UNHEALTHY_THRESHOLD_MAX}.`);
+      return;
+    }
+    const n = Number(trimmed);
     if (!isValidThreshold(n)) {
       setUnhealthyError("threshold", `Threshold must be a whole number from ${UNHEALTHY_THRESHOLD_MIN} to ${UNHEALTHY_THRESHOLD_MAX}.`);
       return;
@@ -373,7 +387,12 @@ export default function ProfilePage() {
   };
 
   const commitUnhealthyReset = (text) => {
-    const minutes = Number((text || "").trim());
+    const trimmed = (text || "").trim();
+    if (!/^\d+$/.test(trimmed)) {
+      setUnhealthyError("reset", "Reset window must be whole minutes from 1 to 1440.");
+      return;
+    }
+    const minutes = Number(trimmed);
     if (!Number.isInteger(minutes) || minutes < 1 || minutes > 1440) {
       setUnhealthyError("reset", "Reset window must be whole minutes from 1 to 1440.");
       return;
@@ -423,7 +442,7 @@ export default function ProfilePage() {
         body: JSON.stringify({ requireLogin }),
       });
       if (res.ok) {
-        setSettings(prev => ({ ...prev, requireLogin }));
+        applySettings(prev => ({ ...prev, requireLogin }));
       }
     } catch (err) {
       console.error("Failed to update require login:", err);
@@ -471,7 +490,7 @@ export default function ProfilePage() {
 
       const data = await res.json();
       if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
+        applySettings((prev) => ({ ...prev, ...data }));
         setOidcForm({
           authMode: data?.authMode || authMode,
           oidcIssuerUrl: data?.oidcIssuerUrl || issuerUrl,
@@ -664,7 +683,7 @@ export default function ProfilePage() {
 
       const data = await res.json();
       if (res.ok) {
-        setSettings((prev) => ({ ...prev, ...data }));
+        applySettings((prev) => ({ ...prev, ...data }));
         setSamlForm({
           samlEntryPoint: data?.samlEntryPoint || payload.samlEntryPoint,
           samlIssuer: data?.samlIssuer || payload.samlIssuer,
@@ -729,7 +748,7 @@ export default function ProfilePage() {
         body: JSON.stringify({ enableObservability: enabled }),
       });
       if (res.ok) {
-        setSettings(prev => ({ ...prev, enableObservability: enabled }));
+        applySettings(prev => ({ ...prev, enableObservability: enabled }));
       }
     } catch (err) {
       console.error("Failed to update enableObservability:", err);
@@ -741,7 +760,7 @@ export default function ProfilePage() {
       const res = await fetch("/api/settings");
       if (!res.ok) return;
       const data = await res.json();
-      setSettings(data);
+      applySettings(data);
     } catch (err) {
       console.error("Failed to reload settings:", err);
     }

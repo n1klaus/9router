@@ -20,7 +20,9 @@ const DEFAULT_SETTINGS = {
   comboStrategies: {},
   comboUnhealthyThreshold: 3,
   comboUnhealthyResetMs: 24 * 60 * 60 * 1000,
-  comboUnhealthyStatuses: DEFAULT_UNHEALTHY_STATUSES,
+  // Copy, not reference: mergeWithDefaults hands this value out to callers, and
+  // an in-place push/sort on a shared array would corrupt the constant.
+  comboUnhealthyStatuses: [...DEFAULT_UNHEALTHY_STATUSES],
   capacityAdapter: {
     vision: { enabled: true, roundRobin: false, models: [] },
     pdf: { enabled: false, roundRobin: false, models: [] },
@@ -98,7 +100,7 @@ export function mergeWithDefaults(raw) {
   if (!isValidResetMs(merged.comboUnhealthyResetMs)) merged.comboUnhealthyResetMs = DEFAULT_SETTINGS.comboUnhealthyResetMs;
   const normalizedUnhealthyStatuses = normalizeStatusesList(merged.comboUnhealthyStatuses);
   merged.comboUnhealthyStatuses = normalizedUnhealthyStatuses === null
-    ? DEFAULT_SETTINGS.comboUnhealthyStatuses
+    ? [...DEFAULT_SETTINGS.comboUnhealthyStatuses]
     : normalizedUnhealthyStatuses;
   if (merged.capacityAdapter && typeof merged.capacityAdapter === "object") {
     for (const capKey of Object.keys(merged.capacityAdapter)) {

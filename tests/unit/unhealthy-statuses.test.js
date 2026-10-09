@@ -14,6 +14,7 @@ import {
   validateUnhealthySettingsPatch,
   validateComboStrategies,
 } from "../../src/shared/utils/unhealthyStatuses.js";
+import { parseStatusesCsv } from "../../cli/src/cli/utils/unhealthyStatuses.js";
 
 describe("unhealthyStatuses", () => {
   it("splits markers from codes", () => {
@@ -140,5 +141,15 @@ describe("unhealthyStatuses", () => {
     const cleaned = sanitizeUnhealthyOverrides(source);
     expect(cleaned).toEqual({ fallbackStrategy: "fusion", unhealthyStatuses: [404], junk: 1 });
     expect(source.unhealthyThreshold).toBe(99); // source object preserved
+  });
+
+  it("keeps CLI and shared status parsers identical across corpus", () => {
+    const corpus = [
+      "", "404", "404,500", "4xx", "4xx,5xx,404", "all", " 404 , 500 ",
+      "99", "abc", "404,,500", "40x",
+    ];
+    for (const input of corpus) {
+      expect(parseStatusesCsv(input), `CLI result for ${JSON.stringify(input)}`).toEqual(parseStatusesInput(input));
+    }
   });
 });
