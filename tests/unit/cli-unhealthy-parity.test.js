@@ -31,7 +31,7 @@ describe("CLI unhealthyStatuses twin parity", () => {
 
   it("matches the known server defaults", () => {
     // Anchors so both sides drifting to the same wrong value still fails.
-    expect(DEFAULT_UNHEALTHY_STATUSES).toEqual([401, 402, 403, 404]);
+    expect(DEFAULT_UNHEALTHY_STATUSES).toEqual([400, 401, 403, 404, 408, 429, 500, 502, 503, 504]);
     expect(UNHEALTHY_THRESHOLD_MIN).toBe(1);
     expect(UNHEALTHY_THRESHOLD_MAX).toBe(20);
     expect(UNHEALTHY_RESET_MS_MIN).toBe(60000);

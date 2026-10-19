@@ -9,7 +9,7 @@ const UNHEALTHY_THRESHOLD_MIN = 1;
 const UNHEALTHY_THRESHOLD_MAX = 20;
 const UNHEALTHY_RESET_MS_MIN = 60 * 1000;
 const UNHEALTHY_RESET_MS_MAX = 24 * 60 * 60 * 1000;
-const DEFAULT_UNHEALTHY_STATUSES = [401, 402, 403, 404];
+const DEFAULT_UNHEALTHY_STATUSES = [400, 401, 403, 404, 408, 429, 500, 502, 503, 504];
 
 /**
  * Parse a status list typed in the CLI. Mirrors parseStatusesInput in

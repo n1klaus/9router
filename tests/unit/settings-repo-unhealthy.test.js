@@ -13,7 +13,7 @@ describe("mergeWithDefaults unhealthy-skip coercion", () => {
     const merged = mergeWithDefaults({});
     expect(merged.comboUnhealthyThreshold).toBe(3);
     expect(merged.comboUnhealthyResetMs).toBe(24 * 60 * 60 * 1000);
-    expect(merged.comboUnhealthyStatuses).toEqual([401, 402, 403, 404]);
+    expect(merged.comboUnhealthyStatuses).toEqual([400, 401, 403, 404, 408, 429, 500, 502, 503, 504]);
     expect(merged.comboUnhealthySkipEnabled).toBe(true);
   });
 
@@ -53,9 +53,9 @@ describe("mergeWithDefaults unhealthy-skip coercion", () => {
   it("normalizes valid statuses and defaults invalid ones", () => {
     expect(mergeWithDefaults({ comboUnhealthyStatuses: [] }).comboUnhealthyStatuses).toEqual([]);
     expect(mergeWithDefaults({ comboUnhealthyStatuses: [429, "5xx", 429] }).comboUnhealthyStatuses).toEqual(["5xx", 429]);
-    expect(mergeWithDefaults({ comboUnhealthyStatuses: null }).comboUnhealthyStatuses).toEqual([401, 402, 403, 404]);
-    expect(mergeWithDefaults({ comboUnhealthyStatuses: [99, 404] }).comboUnhealthyStatuses).toEqual([401, 402, 403, 404]);
-    expect(mergeWithDefaults({ comboUnhealthyStatuses: "404" }).comboUnhealthyStatuses).toEqual([401, 402, 403, 404]);
+    expect(mergeWithDefaults({ comboUnhealthyStatuses: null }).comboUnhealthyStatuses).toEqual([400, 401, 403, 404, 408, 429, 500, 502, 503, 504]);
+    expect(mergeWithDefaults({ comboUnhealthyStatuses: [99, 404] }).comboUnhealthyStatuses).toEqual([400, 401, 403, 404, 408, 429, 500, 502, 503, 504]);
+    expect(mergeWithDefaults({ comboUnhealthyStatuses: "404" }).comboUnhealthyStatuses).toEqual([400, 401, 403, 404, 408, 429, 500, 502, 503, 504]);
   });
 
   it("never mutates DEFAULT_SETTINGS through shared nested references", async () => {
@@ -63,7 +63,7 @@ describe("mergeWithDefaults unhealthy-skip coercion", () => {
     // Statuses: merge hands out a copy...
     mergeWithDefaults({}).comboUnhealthyStatuses.push(500);
     // ...and the shared default list stays untouched.
-    expect(DEFAULT_UNHEALTHY_STATUSES).toEqual([401, 402, 403, 404]);
+    expect(DEFAULT_UNHEALTHY_STATUSES).toEqual([400, 401, 403, 404, 408, 429, 500, 502, 503, 504]);
 
     // capacityAdapter: the per-entry models rewrite must not leak into the
     // constant used to seed the next merge.

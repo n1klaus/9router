@@ -6,7 +6,7 @@ import Modal, { ConfirmModal } from "@/shared/components/Modal";
 import LanguageSwitcher from "@/shared/components/LanguageSwitcher";
 import { useTheme } from "@/shared/hooks/useTheme";
 import { cn } from "@/shared/utils/cn";
-import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes, normalizeStatusesList, isValidThreshold, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX } from "@/shared/utils/unhealthyStatuses";
+import { splitStatusClasses, toggleStatusClass, parseStatusesInput, formatStatusCodes, normalizeStatusesList, isValidThreshold, UNHEALTHY_THRESHOLD_MIN, UNHEALTHY_THRESHOLD_MAX, DEFAULT_UNHEALTHY_STATUSES } from "@/shared/utils/unhealthyStatuses";
 import { APP_CONFIG } from "@/shared/constants/config";
 import { LOCALE_COOKIE, normalizeLocale } from "@/i18n/config";
 import { LOCALE_FLAGS } from "@/shared/constants/locales";
@@ -1730,11 +1730,11 @@ export default function ProfilePage() {
                 })}
               </div>
               <Input
-                value={statusesDraft ?? formatStatusCodes(settings.comboUnhealthyStatuses)}
+                value={statusesDraft ?? (formatStatusCodes(settings.comboUnhealthyStatuses) || DEFAULT_UNHEALTHY_STATUSES.join(", "))}
                 onChange={(e) => setStatusesDraft(e.target.value)}
                 onBlur={commitUnhealthyStatusesText}
                 onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
-                placeholder={unhealthyStatusesEmpty ? "empty = all error statuses" : "401, 402, 403, 404"}
+                placeholder={unhealthyStatusesEmpty ? "empty = all error statuses" : "400, 401, 403, 404, 408, 429, 500, 502, 503, 504"}
                 disabled={loading}
                 className="w-full text-center"
               />
