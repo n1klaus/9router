@@ -831,7 +831,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             onBlur={(e) => commitThreshold(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             title="Empty = inherit the global threshold"
-            className="w-16 text-center"
+            className="w-24 text-center"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -850,7 +850,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             }}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             title="Empty = inherit the global reset window"
-            className="w-16 text-center"
+            className="w-24 text-center"
           />
         </label>
         <span className="flex flex-wrap items-center gap-1">
@@ -873,7 +873,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             placeholder={strategy.unhealthyStatuses === undefined ? "inherit" : "all"}
             title='Codes 400-599, "4xx"/"5xx", or "all" (every error); empty = inherit global'
-            className="w-28 text-center"
+            className="w-40 text-center"
           />
         </span>
         <span className="italic opacity-80">empty = inherit · all = every error</span>
