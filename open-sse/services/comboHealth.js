@@ -71,7 +71,9 @@ export function recordComboFailure(comboName, modelStr, status, cfg = {}) {
     ? { failures: prev.failures + 1, lastFailureAt: now, skippedUntil: prev.skippedUntil }
     : { failures: 1, lastFailureAt: now, skippedUntil: 0 };
   // Set the window once, at the crossing: a skip never outlives one reset window.
-  if (entry.failures >= c.threshold && !entry.skippedUntil) entry.skippedUntil = now + c.resetMs;
+  // Re-arm the skip window even if a previous (expired) skip is still on the entry;
+  // otherwise a model that was skipped once could never be skipped again.
+  if (entry.failures >= c.threshold && (!entry.skippedUntil || entry.skippedUntil <= now)) entry.skippedUntil = now + c.resetMs;
   m.set(modelStr, entry);
 }
 
