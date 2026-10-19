@@ -655,7 +655,12 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   }
   if (answers.length === 1) {
     log.info("FUSION", `Only ${answers[0].model} succeeded — answering directly (no fusion)`);
-    return handleSingleModel(body, answers[0].model);
+    const result = await handleSingleModel(body, answers[0].model);
+    if (healthCfg) {
+      if (result && result.ok) recordComboSuccess(comboName, answers[0].model);
+      else recordComboFailure(comboName, answers[0].model, result ? result.status : null, healthCfg);
+    }
+    return result;
   }
 
   // 4. Judge analyzes + writes one final answer (streams to client if requested).
