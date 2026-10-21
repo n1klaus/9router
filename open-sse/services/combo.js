@@ -12,6 +12,15 @@ import { extractTextContent } from "../translator/formats/gemini.js";
 // stripped). Must be prioritized. Soft (e.g. search) only degrades a feature.
 const HARD_CAPS = new Set(["vision", "pdf", "audioInput", "videoInput"]);
 
+// Format timeout in milliseconds to a human-readable string
+function formatTimeout(ms) {
+  if (ms == null) return "unknown";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`;
+  return `${(ms / 3600000).toFixed(1)}h`;
+}
+
 // Prefixes used when flattening tool turns into plain prose for panel models.
 const TOOL_CALL_PREFIX = "[Called tools: ";
 const TOOL_RESULT_PREFIX = "[Tool result: ";
@@ -299,10 +308,12 @@ export async function handleComboChat({ body, models, handleSingleModel, log, co
   let attemptModels = rotatedModels;
   if (skipped.length > 0) {
     const filtered = rotatedModels.filter((m) => !skipped.includes(m));
+    const timeoutMs = healthCfg?.resetMs;
+    const timeoutStr = formatTimeout(timeoutMs);
     if (filtered.length === 0) {
-      log.warn("COMBO", `All models skipped by health state, trying all anyway: ${skipped.join(", ")}`);
+      log.warn("COMBO", `All models skipped by health state, trying all anyway: ${skipped.join(", ")} (timeout: ${timeoutStr})`);
     } else {
-      log.info("COMBO", `Skipping unhealthy: ${skipped.join(", ")}`);
+      log.info("COMBO", `Skipping unhealthy: ${skipped.join(", ")} (timeout: ${timeoutStr})`);
       attemptModels = filtered;
     }
   }
@@ -571,11 +582,13 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
     const skipped = getSkippedModels(comboName, panel, healthCfg);
     if (skipped.length > 0) {
       const filtered = panel.filter((m) => !skipped.includes(m));
+      const timeoutMs = healthCfg?.resetMs;
+      const timeoutStr = formatTimeout(timeoutMs);
       if (filtered.length > 0) {
-        log.info("FUSION", `Skipping unhealthy: ${skipped.join(", ")}`);
+        log.info("FUSION", `Skipping unhealthy: ${skipped.join(", ")} (timeout: ${timeoutStr})`);
         attemptPanel = filtered;
       } else {
-        log.warn("FUSION", `All panel models skipped by health state, trying all anyway: ${skipped.join(", ")}`);
+        log.warn("FUSION", `All panel models skipped by health state, trying all anyway: ${skipped.join(", ")} (timeout: ${timeoutStr})`);
       }
     }
   }
