@@ -6,6 +6,7 @@ import {
   getProviderAlias,
   isAnthropicCompatibleProvider,
   isOpenAICompatibleProvider,
+  applyWireAwareThinkingFormat,
 } from "@/shared/constants/providers";
 import { getProviderConnections, getCombos, getCustomModels, getModelAliases } from "@/lib/localDb";
 import { getDisabledModels } from "@/lib/disabledModelsDb";
@@ -422,7 +423,7 @@ export async function buildModelsList(kindFilter, options = {}) {
           id: `${alias}/${model.id}`,
           object: "model",
           owned_by: alias,
-          capabilities: getCapabilitiesForModel(alias, model.id),
+          capabilities: applyWireAwareThinkingFormat(getCapabilitiesForModel(alias, model.id), providerId),
         });
       }
     }
@@ -586,7 +587,7 @@ export async function buildModelsList(kindFilter, options = {}) {
         const liveCaps = liveCapabilitiesById.get(modelId);
         const serviceCaps = capabilitiesFromServiceKind(customKind || liveKind);
         const caps = liveCaps || serviceCaps || (kind === LLM_KIND ? getCapabilitiesForModel(providerId, modelId) : null);
-        if (caps) model.capabilities = caps;
+        if (caps) model.capabilities = applyWireAwareThinkingFormat(caps, providerId);
         // Token limits under the snake_case names the OpenAI/OpenRouter
         // convention uses. `capabilities.contextWindow` is camelCase and nested,
         // so clients matching context_length find nothing, fall back to guessing

@@ -1,5 +1,6 @@
 // Provider definitions
 import REGISTRY from "open-sse/providers/registry/index.js";
+import { resolveThinkingFormat } from "open-sse/translator/concerns/thinking.js";
 import { RISK_NOTICE } from "@/shared/constants/providersDisplay.js";
 
 const MEDIA_ENTRY_KEYS = [
@@ -166,3 +167,35 @@ export const USAGE_SUPPORTED_PROVIDERS = REGISTRY
 export const USAGE_APIKEY_PROVIDERS = REGISTRY
   .filter(r => r.features?.usageApikey)
   .map(r => r.id);
+
+// Returns { wire, format } for a provider — wire is the provider's default
+// transport format (transport.format, or "openai" when none is declared) and
+// format is the provider's own declared thinking format (transport.thinkingFormat,
+// or null when none is declared). UI alias resolved through ALIAS_TO_ID first.
+// Unknown provider returns null.
+export function getProviderThinkingContext(providerId) {
+  if (!providerId) return null;
+  const id = ALIAS_TO_ID[providerId] || providerId;
+  const entry = REGISTRY.find((r) => r.id === id);
+  if (!entry) return null;
+  const wire = entry.transport?.format || "openai";
+  const format = entry.transport?.thinkingFormat || null;
+  return { wire, format };
+}
+
+// Returns capabilities with thinkingFormat replaced by the effective format
+// for the provider's default wire, leaving every other field untouched.
+export function applyWireAwareThinkingFormat(caps, providerId) {
+  if (!caps) return caps;
+  const ctx = getProviderThinkingContext(providerId);
+  const effectiveFormat = resolveThinkingFormat({
+    providerFormat: ctx?.format,
+    capsFormat: caps.thinkingFormat,
+    targetFormat: ctx?.wire || "openai",
+  });
+  return {
+    ...caps,
+    thinkingFormat: effectiveFormat,
+  };
+}
+
