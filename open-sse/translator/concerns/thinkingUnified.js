@@ -5,22 +5,7 @@
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 import { getThinkingLevels } from "../../providers/thinkingLevels.js";
 import { PROVIDERS } from "../../providers/index.js";
-import { LEVEL_TO_BUDGET, budgetToLevel, effortToBudget, effortToThinkingLevel } from "./thinking.js";
-
-// Map a target wire-format to its native thinking format (when capability has none).
-const FORMAT_TO_NATIVE = {
-  openai: "openai",
-  "openai-responses": "openai",
-  "openai-response": "openai",
-  codex: "openai",
-  claude: "claude-budget",
-  gemini: "gemini-budget",
-  "gemini-cli": "gemini-budget",
-  vertex: "gemini-budget",
-  antigravity: "gemini-budget",
-  kiro: "kiro",
-  commandcode: "commandcode",
-};
+import { LEVEL_TO_BUDGET, budgetToLevel, effortToBudget, effortToThinkingLevel, FORMAT_TO_NATIVE, NATIVE_ONLY_FORMATS } from "./thinking.js";
 
 // Strip a trailing thinking suffix "model(value)" → "model" (no-op when absent).
 export function stripThinkingSuffix(model) {
@@ -124,8 +109,6 @@ function openAIThinkingDisplay(body) {
   if (typeof body.reasoning_effort === "string") return "summarized";
   return undefined;
 }
-
-const NATIVE_ONLY_FORMATS = new Set(["gemini-level", "gemini-budget", "claude-budget", "claude-adaptive", "kiro"]);
 
 function resolveFormat(targetFormat, model, provider) {
   if (targetFormat === "commandcode") return "commandcode";

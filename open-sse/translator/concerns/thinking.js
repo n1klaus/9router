@@ -1,6 +1,9 @@
 // Concern: reasoning_effort ↔ provider-native thinking config.
-// Central source of truth for level↔budget maps (web-standard values).
-// Provider-specific application lives in thinkingUnified.js; this file is maps-only.
+// Central source of truth for level↔budget maps (web-standard values) and the
+// shared wire facts used to pick a thinking format: which formats are native-only,
+// how a target wire maps to a native format, and how provider/model/wire formats
+// resolve to one effective format. Provider-specific application lives in
+// thinkingUnified.js; this file owns the shared wire facts and maps (zero imports).
 
 // Discrete effort levels, ordered low→high.
 export const EFFORT_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"];
@@ -53,4 +56,49 @@ export function budgetToEffort(budget) {
   if (budget <= 2048) return "low";
   if (budget <= 16384) return "medium";
   return "high";
+}
+
+// Wire facts shared by the thinking pipeline: which formats are native-only (kept
+// on their own wire even when the target wire is OpenAI-shaped), how a target wire
+// maps to its native thinking format, and how provider/model/wire formats resolve
+// to one effective format. Zero imports — dependency-free so thinkingLevels.js can
+// import it without a cycle.
+
+export const FORMAT_TO_NATIVE = {
+  openai: "openai",
+  "openai-responses": "openai",
+  "openai-response": "openai",
+  codex: "openai",
+  claude: "claude-budget",
+  gemini: "gemini-budget",
+  "gemini-cli": "gemini-budget",
+  vertex: "gemini-budget",
+  antigravity: "gemini-budget",
+  kiro: "kiro",
+  commandcode: "commandcode",
+};
+
+export const NATIVE_ONLY_FORMATS = new Set([
+  "gemini-level",
+  "gemini-budget",
+  "claude-budget",
+  "claude-adaptive",
+  "kiro",
+  "minimax",
+]);
+
+export function isOpenAIWireFormat(format) {
+  return format === "openai" || format === "openai-responses";
+}
+
+export function resolveThinkingFormat({ providerFormat, capsFormat, targetFormat }) {
+  // Step 1: provider-declared format wins.
+  if (providerFormat) return providerFormat;
+  // Step 2: model's own format wins unless it is native-only and the target wire
+  // is OpenAI-shaped — then fall through to the wire default below.
+  if (capsFormat && !(isOpenAIWireFormat(targetFormat) && NATIVE_ONLY_FORMATS.has(capsFormat))) {
+    return capsFormat;
+  }
+  // Step 3: the wire's default format.
+  return FORMAT_TO_NATIVE[targetFormat] || "openai";
 }
