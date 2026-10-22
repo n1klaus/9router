@@ -5,7 +5,7 @@
 import { getCapabilitiesForModel } from "../../providers/capabilities.js";
 import { getThinkingLevels } from "../../providers/thinkingLevels.js";
 import { PROVIDERS } from "../../providers/index.js";
-import { LEVEL_TO_BUDGET, budgetToLevel, effortToBudget, effortToThinkingLevel, FORMAT_TO_NATIVE, NATIVE_ONLY_FORMATS } from "./thinking.js";
+import { LEVEL_TO_BUDGET, budgetToLevel, effortToBudget, effortToThinkingLevel, resolveThinkingFormat } from "./thinking.js";
 
 // Strip a trailing thinking suffix "model(value)" → "model" (no-op when absent).
 export function stripThinkingSuffix(model) {
@@ -23,7 +23,7 @@ export function parseSuffix(model) {
   const cleanModel = m[1].trim();
   const raw = m[2].trim().toLowerCase();
   if (raw === "none" || raw === "off") return { cleanModel, override: { mode: "none" } };
-  if (raw === "auto") return { cleanModel, override: { mode: "auto" } };
+  if (raw === "auto" || raw === "thinking") return { cleanModel, override: { mode: "auto" } };
   if (raw === "ultra") return { cleanModel, override: { mode: "level", level: raw } };
   if (/^\d+$/.test(raw)) return { cleanModel, override: { mode: "budget", budget: Number(raw) } };
   if (LEVEL_TO_BUDGET[raw] !== undefined) return { cleanModel, override: { mode: "level", level: raw } };
@@ -112,19 +112,15 @@ function openAIThinkingDisplay(body) {
 
 function resolveFormat(targetFormat, model, provider) {
   if (targetFormat === "commandcode") return "commandcode";
-  const providerFmt = provider ? PROVIDERS[provider]?.thinkingFormat : null;
-  if (providerFmt) return providerFmt;
-  const caps = getCapabilitiesForModel(provider, model);
-  const isOpenAIWire = targetFormat === "openai" || targetFormat === "openai-responses";
-  if (caps.thinkingFormat && !(isOpenAIWire && NATIVE_ONLY_FORMATS.has(caps.thinkingFormat))) {
-    // Muse (Meta) strict Responses API rejects top-level reasoning_effort and
-    // requires nested reasoning: { effort, summary }. Other upstreams keep Chat-shaped effort.
-    if (provider === "muse" && targetFormat === "openai-responses") {
-      return "openai-responses";
-    }
-    return caps.thinkingFormat;
+  const providerFormat = provider ? PROVIDERS[provider]?.thinkingFormat : null;
+  if (providerFormat) return providerFormat;
+  // Muse (Meta) strict Responses API rejects top-level reasoning_effort and
+  // requires nested reasoning: { effort, summary }. Other upstreams keep Chat-shaped effort.
+  if (provider === "muse" && targetFormat === "openai-responses") {
+    return "openai-responses";
   }
-  return FORMAT_TO_NATIVE[targetFormat] || "openai";
+  const capsFormat = getCapabilitiesForModel(provider, model)?.thinkingFormat;
+  return resolveThinkingFormat({ providerFormat, capsFormat, targetFormat });
 }
 
 // Convert unified config to a budget number (for budget-based formats).
@@ -249,7 +245,7 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
     case "openai": {
       if (none && canDisable) { body.reasoning_effort = "none"; break; }
       const level = toLevel(eff);
-      if (level) body.reasoning_effort = normalizeOpenAILevel(level, supportedLevels);
+      if (level && level !== "auto") body.reasoning_effort = normalizeOpenAILevel(level, supportedLevels);
       break;
     }
     case "openai-responses": {
@@ -258,7 +254,11 @@ function applyFormat(fmt, body, cfg, caps, supportedLevels, display) {
       // parameter `reasoning_effort`"). "none" is expressed by omitting reasoning.
       if (none && canDisable) { delete body.reasoning; break; }
       const level = toLevel(eff);
-      if (level) {
+      if (level === "auto") {
+        if (body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)) {
+          delete body.reasoning.effort;
+        }
+      } else if (level) {
         const current = body.reasoning && typeof body.reasoning === "object" && !Array.isArray(body.reasoning)
           ? body.reasoning
           : {};
@@ -422,7 +422,7 @@ export function applyThinking(targetFormat, model, body, provider = null, intent
   if (!cfg) return body;
 
   const fmt = resolveFormat(targetFormat, cleanModel, provider);
-  const supportedLevels = getThinkingLevels(provider, cleanModel);
+  const supportedLevels = getThinkingLevels(provider, cleanModel, targetFormat, provider ? PROVIDERS[provider]?.thinkingFormat : null);
   // Anthropic's `display` (summarized | omitted) decides whether thinking text
   // comes back at all; keep what the client asked for instead of resetting it.
   // An OpenAI-shaped client's ask arrives via the captured intent instead.
