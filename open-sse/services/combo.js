@@ -621,8 +621,22 @@ function collectPanel(calls, { minPanel, stragglerGraceMs, panelHardTimeoutMs })
  * @param {Object} [options.tuning] - Override FUSION_DEFAULTS (minPanel, grace, timeout)
  * @returns {Promise<Response>}
  */
-export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning }) {
+export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning, healthCfg = null }) {
   const panel = Array.isArray(models) ? models.filter(Boolean) : [];
+  // Sticky failure memory: skip unhealthy panel models (mirrors handleComboChat).
+  let attemptPanel = panel;
+  if (healthCfg && panel.length > 0) {
+    const skipped = getSkippedModels(comboName, panel, healthCfg);
+    if (skipped.length > 0) {
+      const filtered = panel.filter((m) => !skipped.includes(m));
+      if (filtered.length > 0) {
+        log.info("FUSION", `Skipping unhealthy: ${skipped.join(", ")}`);
+        attemptPanel = filtered;
+      } else {
+        log.warn("FUSION", `All panel models skipped by health state, trying all anyway: ${skipped.join(", ")}`);
+      }
+    }
+  }
   if (panel.length === 0) {
     return new Response(
       JSON.stringify({ error: { message: "Fusion combo has no models" } }),
@@ -632,12 +646,17 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
 
   // A single-model fusion has nothing to fuse — just answer directly.
   if (panel.length === 1) {
-    return handleSingleModel(body, panel[0]);
+    const r = await handleSingleModel(body, panel[0]);
+    if (healthCfg) {
+      if (r && r.ok) recordComboSuccess(comboName, panel[0]);
+      else recordComboFailure(comboName, panel[0], r ? r.status : null, healthCfg);
+    }
+    return r;
   }
 
   const cfg = { ...FUSION_DEFAULTS, ...(tuning || {}) };
-  const minPanel = Math.min(Math.max(2, cfg.minPanel), panel.length);
-  const judge = judgeModel && judgeModel.trim() ? judgeModel.trim() : panel[0];
+  const minPanel = Math.min(Math.max(2, cfg.minPanel), attemptPanel.length);
+  const judge = judgeModel && judgeModel.trim() ? judgeModel.trim() : (attemptPanel[0] || panel[0]);
   log.info("FUSION", `Combo "${comboName}" | panel=${panel.length} [${panel.join(", ")}] | judge=${judge} | quorum=${minPanel}`);
 
   // 1. Fan out to the panel in parallel: non-streaming, tools stripped (we want prose).
@@ -655,7 +674,7 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   }
 
   const t0 = Date.now();
-  const calls = panel.map((m) => withTimeout(handleSingleModel(panelBody, m, true), cfg.panelHardTimeoutMs));
+  const calls = attemptPanel.map((m) => withTimeout(handleSingleModel(panelBody, m, true), cfg.panelHardTimeoutMs));
   const settled = await collectPanel(calls, { ...cfg, minPanel });
   log.info("FUSION", `fan-out collected in ${Date.now() - t0}ms`);
 
@@ -663,21 +682,23 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   const answers = [];
   for (let i = 0; i < settled.length; i++) {
     const res = settled[i];
-    const model = panel[i];
-    if (!res) { log.warn("FUSION", `Panel ${model} dropped (straggler/timeout)`); continue; }
-    if (res.__timeout) { log.warn("FUSION", `Panel ${model} timed out`); continue; }
-    if (res.__error) { log.warn("FUSION", `Panel ${model} threw`, { error: res.__error?.message || String(res.__error) }); continue; }
-    if (!res.ok) { log.warn("FUSION", `Panel ${model} failed`, { status: res.status }); continue; }
+    const model = attemptPanel[i];
+    if (!res) { if (healthCfg) recordComboFailure(comboName, model, null, healthCfg); log.warn("FUSION", `Panel ${model} dropped (straggler/timeout)`); continue; }
+    if (res.__timeout) { if (healthCfg) recordComboFailure(comboName, model, null, healthCfg); log.warn("FUSION", `Panel ${model} timed out`); continue; }
+    if (res.__error) { if (healthCfg) recordComboFailure(comboName, model, null, healthCfg); log.warn("FUSION", `Panel ${model} threw`, { error: res.__error?.message || String(res.__error) }); continue; }
+    if (!res.ok) { if (healthCfg) recordComboFailure(comboName, model, res.status, healthCfg); log.warn("FUSION", `Panel ${model} failed`, { status: res.status }); continue; }
     try {
       const json = await res.clone().json();
       const text = extractPanelText(json);
       if (text) {
+        if (healthCfg) recordComboSuccess(comboName, model);
         answers.push({ model, text });
         log.info("FUSION", `Panel ${model} ok (${text.length} chars)`);
       } else {
         log.warn("FUSION", `Panel ${model} returned empty content`);
       }
     } catch (e) {
+      if (healthCfg) recordComboFailure(comboName, model, null, healthCfg);
       log.warn("FUSION", `Panel ${model} unparseable`, { error: e.message || String(e) });
     }
   }
@@ -692,11 +713,21 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   }
   if (answers.length === 1) {
     log.info("FUSION", `Only ${answers[0].model} succeeded — answering directly (no fusion)`);
-    return handleSingleModel(body, answers[0].model);
+    const result = await handleSingleModel(body, answers[0].model);
+    if (healthCfg) {
+      if (result && result.ok) recordComboSuccess(comboName, answers[0].model);
+      else recordComboFailure(comboName, answers[0].model, result ? result.status : null, healthCfg);
+    }
+    return result;
   }
 
   // 4. Judge analyzes + writes one final answer (streams to client if requested).
   const judgeBody = appendUserTurn(body, buildJudgePrompt(answers));
   log.info("FUSION", `Judging ${answers.length} answers with ${judge}`);
-  return handleSingleModel(judgeBody, judge);
+  const judgeResult = await handleSingleModel(judgeBody, judge);
+  if (healthCfg) {
+    if (judgeResult && judgeResult.ok) recordComboSuccess(comboName, judge);
+    else recordComboFailure(comboName, judge, judgeResult ? judgeResult.status : null, healthCfg);
+  }
+  return judgeResult;
 }

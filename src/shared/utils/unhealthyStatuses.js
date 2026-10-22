@@ -3,7 +3,7 @@
 // "4xx" = all 400-499, "5xx" = all 500-599. An empty array counts every error.
 
 export const UNHEALTHY_CLASS_MARKERS = ["4xx", "5xx"];
-export const DEFAULT_UNHEALTHY_STATUSES = [401, 402, 403, 404];
+export const DEFAULT_UNHEALTHY_STATUSES = [400, 401, 403, 404, 408, 429, 500, 502, 503, 504];
 export const UNHEALTHY_THRESHOLD_MIN = 1;
 export const UNHEALTHY_THRESHOLD_MAX = 20;
 export const UNHEALTHY_RESET_MS_MIN = 60 * 1000;

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 
 import { handleFusionChat } from "../../open-sse/services/combo.js";
+import { getSkippedModels, resetComboHealth } from "../../open-sse/services/comboHealth.js";
 
 const log = { info: () => {}, warn: () => {}, debug: () => {} };
 
@@ -18,6 +19,8 @@ function errResponse(status = 500) {
 }
 
 describe("fusion combo", () => {
+  beforeEach(() => resetComboHealth());
+
   it("answers directly with a single-model panel (nothing to fuse)", async () => {
     const handleSingleModel = vi.fn(async () => okResponse("solo"));
     await handleFusionChat({
@@ -128,6 +131,27 @@ describe("fusion combo", () => {
     // No judge call — single answer means there is nothing to fuse.
     const judged = handleSingleModel.mock.calls.some(([, m]) => m === "p/judge");
     expect(judged).toBe(false);
+  });
+
+  it("records health result from lone survivor direct retry", async () => {
+    const handleSingleModel = vi.fn(async (_body, model, isPanel) => {
+      if (isPanel && model === "p/ok") return okResponse("lone");
+      if (isPanel) return errResponse(503);
+      return errResponse(503);
+    });
+    const healthCfg = { threshold: 1, resetMs: 600000, statuses: [] };
+
+    await handleFusionChat({
+      body: { messages: [{ role: "user", content: "Q" }] },
+      models: ["p/ok", "p/bad"],
+      handleSingleModel,
+      log,
+      comboName: "C",
+      healthCfg,
+      tuning: { minPanel: 2, stragglerGraceMs: 50, panelHardTimeoutMs: 5000 },
+    });
+
+    expect(getSkippedModels("C", ["p/ok"], healthCfg)).toEqual(["p/ok"]);
   });
 
   it("returns 503 when the whole panel fails", async () => {

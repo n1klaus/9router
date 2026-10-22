@@ -133,9 +133,9 @@ describe("comboHealth", () => {
     expect(getSkippedModels("C", ["p/boom"], cfg)).toEqual(["p/boom"]);
   });
 
-  it("defaults count 404/401/402/403 but not transient 5xx", () => {
+  it("defaults count configured client and transient server errors", () => {
     recordComboFailure("C", "p/503", 503, { threshold: 1 });
-    expect(getSkippedModels("C", ["p/503"], { threshold: 1 })).toEqual([]);
+    expect(getSkippedModels("C", ["p/503"], { threshold: 1 })).toEqual(["p/503"]);
     recordComboFailure("C", "p/404", 404, { threshold: 1 });
     expect(getSkippedModels("C", ["p/404"], { threshold: 1 })).toEqual(["p/404"]);
     recordComboFailure("C", "p/any", 503, { threshold: 1, statuses: [] });
@@ -144,9 +144,9 @@ describe("comboHealth", () => {
 
   it("falls back to default statuses when a configured list is corrupt", () => {
     const cfg = { threshold: 1, statuses: [99] };
-    expect(shouldCount(500, cfg)).toBe(false);
+    expect(shouldCount(500, cfg)).toBe(true);
     recordComboFailure("C", "p/500", 500, cfg);
-    expect(getSkippedModels("C", ["p/500"], cfg)).toEqual([]);
+    expect(getSkippedModels("C", ["p/500"], cfg)).toEqual(["p/500"]);
     recordComboFailure("C", "p/404", 404, cfg);
     expect(getSkippedModels("C", ["p/404"], cfg)).toEqual(["p/404"]);
   });

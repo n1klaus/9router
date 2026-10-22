@@ -13,6 +13,13 @@ const RESET_MIN_MINUTES = UNHEALTHY_RESET_MS_MIN / 60000;
 const RESET_MAX_MINUTES = UNHEALTHY_RESET_MS_MAX / 60000;
 
 /**
+ * Merge a carried strategy override into a rename target entry.
+ * Target keys win, carried keys fill the gaps; a non-object target
+ * returns the override unchanged.
+ */
+function mergeRenameCarry(override, targetEntry) { return targetEntry && typeof targetEntry === "object" && !Array.isArray(targetEntry) ? { ...override, ...targetEntry } : override; }
+
+/**
  * Format model to string (handle both string and object)
  */
 function formatModel(model) {
@@ -22,7 +29,6 @@ function formatModel(model) {
   }
   return String(model);
 }
-
 
 /**
  * Show actions for a specific combo
@@ -56,7 +62,6 @@ async function showComboActions(combo, breadcrumb = []) {
     ]
   });
 }
-
 
 /**
  * Handle editing a single combo
@@ -97,14 +102,20 @@ async function handleEditSingleCombo(combo) {
   // not on the combo record. Enter = keep, "-" = inherit global.
   // Renames migrate the entry: read the old key, write the new one.
   const settingsRes = await api.getSettings();
+  // Strategy state collected during the prompts below; the settings PATCH
+  // runs only after updateCombo succeeds (a failed rename must not orphan
+  // the override under the new name).
+  let comboStrategies = null;
+  let override = null;
+  let merged = null;
+  let changed = false;
   if (!settingsRes.success) {
     // Never write comboStrategies from a failed read: it would drop every other combo's entry.
     showStatus(`Failed to load settings: ${settingsRes.error} — skipped unhealthy-skip overrides`, "error");
   } else {
     const settingsData = settingsRes.data || {};
-    const comboStrategies = { ...(settingsData.comboStrategies || {}) };
-    const override = { ...(comboStrategies[combo.name] || {}) };
-    let changed = false;
+    comboStrategies = { ...(settingsData.comboStrategies || {}) };
+    override = { ...(comboStrategies[combo.name] || {}) };
     console.log("\nUnhealthy skip (Enter = keep, '-' = inherit global):");
 
     const thRaw = ((await prompt(`  Threshold ${UNHEALTHY_THRESHOLD_MIN}-${UNHEALTHY_THRESHOLD_MAX} (global ${settingsData.comboUnhealthyThreshold ?? 3}): `)) || "").trim();
@@ -147,13 +158,16 @@ async function handleEditSingleCombo(combo) {
     // On rename collision (target already has an entry, e.g. concurrent edit),
     // merge instead of clobbering: target keys win, carried keys fill the gaps.
     const targetEntry = name !== combo.name ? comboStrategies[name] : undefined;
-    const merged = targetEntry && typeof targetEntry === "object" && !Array.isArray(targetEntry)
-      ? { ...override, ...targetEntry }
-      : override;
+    merged = mergeRenameCarry(override, targetEntry);
+  }
 
+  const result = await api.updateCombo(combo.id, { name, models: finalModels });
+
+  if (result.success) {
+    showStatus("Combo updated!", "success");
     // Skip the PATCH when nothing changed: writing comboStrategies resets the
     // server's in-memory health state for every combo.
-    if (changed || (name !== combo.name && Object.prototype.hasOwnProperty.call(comboStrategies, combo.name))) {
+    if (comboStrategies && (changed || (name !== combo.name && Object.prototype.hasOwnProperty.call(comboStrategies, combo.name)))) {
       if (name !== combo.name) delete comboStrategies[combo.name];
       if (!merged.fallbackStrategy || merged.fallbackStrategy === "fallback") delete merged.fallbackStrategy;
       if (Object.keys(merged).length === 0) delete comboStrategies[name];
@@ -161,18 +175,11 @@ async function handleEditSingleCombo(combo) {
       const strategySync = await api.updateSettings({ comboStrategies });
       if (!strategySync.success) showStatus(`Unhealthy-skip settings failed: ${strategySync.error}`, "error");
     }
-  }
-  
-  const result = await api.updateCombo(combo.id, { name, models: finalModels });
-  
-  if (result.success) {
-    showStatus("Combo updated!", "success");
   } else {
     showStatus(`Update failed: ${result.error}`, "error");
   }
   await pause();
 }
-
 
 /**
  * Handle deleting a single combo
@@ -190,7 +197,6 @@ async function handleDeleteSingleCombo(combo) {
     await pause();
   }
 }
-
 
 /**
  * Main combos menu - list all combos and actions
@@ -231,7 +237,6 @@ async function showCombosMenu(breadcrumb = []) {
     }
   });
 }
-
 
 /**
  * Show combo detail with stats
@@ -274,7 +279,6 @@ async function showComboDetail(comboId) {
   await pause();
 }
 
-
 /**
  * Format combo for menu display
  */
@@ -286,7 +290,6 @@ function formatComboLabel(combo) {
     : modelsChain;
   return `${combo.name}: ${displayModels}`;
 }
-
 
 /**
  * Create new combo
@@ -405,4 +408,4 @@ async function handleCreateCombo() {
   await pause();
 }
 
-module.exports = { showCombosMenu };
+module.exports = { showCombosMenu, mergeRenameCarry };

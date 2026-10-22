@@ -811,8 +811,14 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
         </div>
       </div>
       {/* Unhealthy skip overrides — empty = inherit global */}
-      <div className="mt-3 flex flex-wrap items-center gap-3 border-t border-border/50 pt-2 text-[11px] text-text-muted">
-        <span className="font-medium">Unhealthy skip</span>
+      <div className="mt-3 flex flex-wrap items-center gap-3 rounded-md border border-border/40 bg-black/[0.015] px-2 py-1.5 text-[11px] text-text-muted dark:bg-white/[0.02]">
+        <span className="flex items-center gap-1 font-medium text-text-main">
+          <span className="material-symbols-outlined text-[13px]">health_and_safety</span>
+          Unhealthy skip
+          <span className="rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary">
+            {strategy.unhealthyThreshold != null || strategy.unhealthyResetMs != null || strategy.unhealthyStatuses != null ? "custom" : "inherit"}
+          </span>
+        </span>
         <label className="flex items-center gap-1">
           threshold
           <Input
@@ -825,7 +831,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             onBlur={(e) => commitThreshold(e.target.value)}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             title="Empty = inherit the global threshold"
-            className="w-16 text-center"
+            className="w-24 text-center"
           />
         </label>
         <label className="flex items-center gap-1">
@@ -844,7 +850,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             }}
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             title="Empty = inherit the global reset window"
-            className="w-16 text-center"
+            className="w-24 text-center"
           />
         </label>
         <span className="flex flex-wrap items-center gap-1">
@@ -867,7 +873,7 @@ function ComboCard({ combo, getCaps, comboByName = {}, activeProviders = [], cop
             onKeyDown={(e) => { if (e.key === "Enter") e.currentTarget.blur(); }}
             placeholder={strategy.unhealthyStatuses === undefined ? "inherit" : "all"}
             title='Codes 400-599, "4xx"/"5xx", or "all" (every error); empty = inherit global'
-            className="w-28 text-center"
+            className="w-40 text-center"
           />
         </span>
         <span className="italic opacity-80">empty = inherit · all = every error</span>
