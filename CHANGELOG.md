@@ -1,3 +1,8 @@
+# Unreleased
+
+## Fixes
+- **Thinking**: keep the requested reasoning effort for MiniMax models served through OpenAI-shaped gateways, where the effort used to be dropped before dispatch and the request line reported `auto`; MiniMax's own Anthropic-shaped endpoints keep their native thinking switch, and the offered effort levels now follow the wire
+
 # v0.5.104 (2026-10-15)
 
 ## Features

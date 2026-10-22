@@ -2,6 +2,17 @@
 // Reuses capabilities.js (thinkingFormat/canDisable) so this file only maps format→levels (DRY).
 import { getCapabilitiesForModel } from "./capabilities.js";
 import { matchPattern } from "./pricing.js";
+import { resolveThinkingFormat, isOpenAIWireFormat } from "../translator/concerns/thinking.js";
+
+// A PATTERN_THINKING entry's optional `wire` qualifier restricts which request
+// wire it applies to. "openai" matches the OpenAI family ("openai" and
+// "openai-responses"); any other qualifier matches its wire exactly. An entry
+// without a qualifier keeps matching as today (any wire, including when the
+// wireFormat argument is omitted).
+function wireMatches(qualifier, wireFormat) {
+  if (qualifier === "openai") return isOpenAIWireFormat(wireFormat);
+  return qualifier === wireFormat;
+}
 import { resolveKiroEffortPath } from "../config/kiroConstants.js";
 import { getProviderModels } from "../config/providerModels.js";
 
@@ -85,10 +96,20 @@ const PATTERN_THINKING = [
   { provider: "minimax-code", pattern: "MiniMax-M3", levels: ["none", "high"] },
   { provider: "minimax-code-global", pattern: "MiniMax-M3.1*", levels: ["low", "medium", "high", "xhigh", "max"] },
   { provider: "minimax-code-global", pattern: "MiniMax-M3", levels: ["none", "high"] },
+  // MiniMax M3.1 on an OpenAI-shaped wire: MiniMax documents no "minimal" effort
+  // level and M3.1 always thinks, so neither belongs in the offered list — the
+  // highest level it does implement is "xhigh".
+  { pattern: "*minimax-m3.1*", wire: "openai", levels: ["low", "medium", "high", "xhigh"] },
 ];
 
 // Returns valid thinking levels for a model, or null when the model has no reasoning.
-export function getThinkingLevels(provider, model) {
+// `wireFormat` names the wire the request goes out on; `providerFormat` is the
+// provider's declared thinking format. When `wireFormat` is supplied, the
+// effective format is resolved (provider-declared → model's own → wire default)
+// and the level list comes from FORMAT_LEVELS[effectiveFormat], so the offered
+// levels follow the wire. When omitted, today's behaviour (the model's own
+// format) is preserved for existing two-argument call sites.
+export function getThinkingLevels(provider, model, wireFormat, providerFormat) {
   if (provider === "kiro" && resolveKiroEffortPath(model) === null) return null;
   const caps = getCapabilitiesForModel(provider, model);
   if (!caps.reasoning) return null;
@@ -97,9 +118,21 @@ export function getThinkingLevels(provider, model) {
     ? getProviderModels("cx").find((entry) => entry.id === baseId)?.thinkingLevels
     : null;
   const hit = PATTERN_THINKING.find((entry) =>
-    (!entry.provider || entry.provider === provider) && matchPattern(entry.pattern, model)
+    (!entry.provider || entry.provider === provider)
+    && (!entry.wire || wireMatches(entry.wire, wireFormat))
+    && matchPattern(entry.pattern, model)
   );
-  let levels = modelLevels || hit?.levels || FORMAT_LEVELS[caps.thinkingFormat] || L.base;
+  let levels;
+  if (wireFormat) {
+    const effectiveFormat = resolveThinkingFormat({
+      providerFormat,
+      capsFormat: caps.thinkingFormat,
+      targetFormat: wireFormat,
+    });
+    levels = modelLevels || hit?.levels || FORMAT_LEVELS[effectiveFormat] || L.base;
+  } else {
+    levels = modelLevels || hit?.levels || FORMAT_LEVELS[caps.thinkingFormat] || L.base;
+  }
   if (caps.thinkingCanDisable === false) levels = levels.filter((l) => l !== "none");
   return levels;
 }
