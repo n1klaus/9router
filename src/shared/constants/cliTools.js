@@ -587,6 +587,25 @@ gemini extensions install https://github.com/manalkaff/opendesign
       },
     ],
   },
+  perch: {
+    id: "perch",
+    name: "Perch CLI",
+    image: "/providers/perch.png",
+    color: "#6366F1",
+    description: "Perch AI terminal agent (BYOLM via 9Router)",
+    configType: "custom",
+    docsUrl: "https://www.perchai.app/docs",
+    notes: [
+      {
+        type: "info",
+        text: "Perch reads ~/.perch/byo-local.json. 9Router writes one local BYOLM record pointing at this server.",
+      },
+      {
+        type: "warning",
+        text: "Use BYOLM only. Do not proxy or resell Perch-hosted models or intercept Perch traffic — the Perch terms forbid it.",
+      },
+    ],
+  },
   // HIDDEN: gemini-cli
   // "gemini-cli": {
   //   id: "gemini-cli",
