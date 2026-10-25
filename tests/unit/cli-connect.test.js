@@ -72,6 +72,7 @@ describe("connect tool writers", () => {
     home = fs.mkdtempSync(path.join(os.tmpdir(), "9r-connect-"));
     vi.spyOn(os, "homedir").mockReturnValue(home);
     vi.stubEnv("XDG_CONFIG_HOME", "");
+    vi.stubEnv("PERCH_HOME", "");
   });
   afterEach(() => {
     vi.restoreAllMocks();
@@ -91,6 +92,38 @@ describe("connect tool writers", () => {
       await t.reset();
       for (const f of written) expect(fs.readFileSync(f, "utf8")).not.toContain(CTX.apiKey);
     }
+  });
+
+  it("perch writes a BYOLM record and keeps cloud records", async () => {
+    const f = path.join(home, ".perch", "byo-local.json");
+    fs.mkdirSync(path.dirname(f), { recursive: true });
+    fs.writeFileSync(f, JSON.stringify({
+      version: 1,
+      records: [{ providerId: "custom", scope: "cloud", apiKeyCiphertext: "cloud-key" }],
+    }));
+
+    await tool("perch").apply(CTX);
+
+    const cfg = readJson(f);
+    expect(cfg.records.find((r) => r.scope === "local" && r.providerId === "local")).toMatchObject({
+      baseUrl: "http://gw.test:20128/v1",
+      modelId: CTX.model,
+      apiKeyCiphertext: CTX.apiKey,
+      models: [{ id: CTX.model }],
+    });
+    expect(cfg.records[0]).toMatchObject({ providerId: "custom" });
+    expect(await tool("perch").show()).toMatchObject({
+      baseUrl: "http://gw.test:20128/v1",
+      apiKey: CTX.apiKey,
+      models: { main: CTX.model },
+    });
+
+    // A trailing slash must not produce /v1//v1 — same contract as the route.
+    await tool("perch").apply({ ...CTX, baseUrl: "http://gw.test:20128/v1/" });
+    expect(readJson(f).records.find((r) => r.scope === "local" && r.providerId === "local").baseUrl).toBe("http://gw.test:20128/v1");
+
+    await tool("perch").reset();
+    expect(readJson(f).records).toEqual([{ providerId: "custom", scope: "cloud", apiKeyCiphertext: "cloud-key" }]);
   });
 
   it("claude merges env and keeps unrelated settings; reset removes only 9router keys", async () => {

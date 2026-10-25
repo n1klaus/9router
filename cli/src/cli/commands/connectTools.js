@@ -535,11 +535,74 @@ const omp = {
   },
 };
 
-const TOOLS = [claude, codex, opencode, droid, crush, kilo, cline, pi, omp];
+// ── Perch CLI (BYOLM) ────────────────────────────────────────────────────────
+// Perch stores BYOLM credentials in ~/.perch/byo-local.json (LocalByolmStore
+// shape). Only the scope=local/providerId=local record is 9Router's to write.
+const perchDir = () => process.env.PERCH_HOME?.trim() || path.join(home(), ".perch");
+const perchPath = () => path.join(perchDir(), "byo-local.json");
+const isPerchLocal = (r) => r?.scope === "local" && r?.providerId === "local";
+// `v1()` alone turns "http://h/v1/" into "http://h/v1//v1"; strip first.
+const perchV1 = (u) => v1(String(u).replace(/\/+$/, ""));
+
+const perch = {
+  id: "perch",
+  name: "Perch CLI",
+  paths: () => [perchPath()],
+  route: "perch-settings",
+  serverModel(data) {
+    if (!data?.has9Router) return null;
+    const rec = (data.config?.records || []).find(isPerchLocal);
+    return isStr(rec?.modelId) ? rec.modelId : null;
+  },
+  async apply({ baseUrl, apiKey, model }) {
+    const file = perchPath();
+    const cfg = readJson(file) || {};
+    const previous = (cfg.records || []).find(isPerchLocal);
+    const now = new Date().toISOString();
+    const records = (cfg.records || []).filter((r) => !isPerchLocal(r));
+    records.push({
+      userId: "local-device",
+      providerId: "local",
+      scope: "local",
+      apiKeyCiphertext: apiKey || null,
+      baseUrl: perchV1(baseUrl),
+      modelId: model,
+      models: [{ id: model }],
+      keyHint: apiKey ? `…${apiKey.slice(-4)}` : null,
+      capabilityProfile: null,
+      createdAt: previous?.createdAt || now,
+      updatedAt: now,
+      _managedBy: "9router",
+    });
+    writeJson(file, { ...cfg, version: 1, records });
+    return [file];
+  },
+  async show() {
+    const rec = (readJson(perchPath())?.records || []).find(isPerchLocal);
+    if (!rec) return {};
+    return {
+      baseUrl: rec.baseUrl,
+      apiKey: rec.apiKeyCiphertext || undefined,
+      models: isStr(rec.modelId) ? { main: rec.modelId } : {},
+    };
+  },
+  async reset() {
+    const file = perchPath();
+    const cfg = readJson(file);
+    if (!cfg) return [];
+    const records = (cfg.records || []).filter((r) => !isPerchLocal(r));
+    if (records.length === (cfg.records || []).length) return [];
+    rewriteFile(file, JSON.stringify({ ...cfg, version: 1, records }, null, 2));
+    fs.chmodSync(file, SECRET_MODE); // rewriteFile keeps an existing 0644 file's mode
+    return [file];
+  },
+};
+
+const TOOLS = [claude, codex, opencode, droid, crush, kilo, cline, pi, omp, perch];
 const TOOL_IDS = TOOLS.map((t) => t.id);
 const TOOL_ALIASES = {
   "claude-code": "claude", "claudecode": "claude", "factory": "droid", "kilocode": "kilo",
-  "pi-coding-agent": "pi", "oh-my-pi": "omp",
+  "pi-coding-agent": "pi", "oh-my-pi": "omp", "perchai": "perch",
 };
 
 function resolveTools(list) {
