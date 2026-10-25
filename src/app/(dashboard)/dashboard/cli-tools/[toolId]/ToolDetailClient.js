@@ -172,6 +172,7 @@ export default function ToolDetailClient({ toolId, machineId }) {
       case "forge":
       case "smelt":
       case "codewhale":
+      case "perch":
         return <GenericCliToolCard {...commonProps} activeProviders={getActiveProviders()} cloudEnabled={cloudEnabled} />;
       default:
         return <DefaultToolCard toolId={toolId} {...commonProps} activeProviders={getActiveProviders()} cloudEnabled={cloudEnabled} tunnelEnabled={tunnelEnabled} />;

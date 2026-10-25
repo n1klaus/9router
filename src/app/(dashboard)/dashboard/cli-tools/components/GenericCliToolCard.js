@@ -41,6 +41,12 @@ const readPiModels = (cfg) => {
   return { ids, caps };
 };
 
+// Perch's config is Perch's own record shape: one scope=local/providerId=local
+// entry inside byo-local.json rather than a scalar baseUrl/model block.
+const perchRecord = (cfg) => (cfg?.records || []).find((r) => r.scope === "local" && r.providerId === "local");
+const configuredModel = (cfg) =>
+  cfg?.model || cfg?.openai?.model || cfg?.providers?.["9router"]?.models?.[0]?.id || perchRecord(cfg)?.modelId || "";
+
 export default function GenericCliToolCard({
   tool,
   isExpanded,
@@ -62,10 +68,7 @@ export default function GenericCliToolCard({
   const [message, setMessage] = useState(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [selectedApiKey, setSelectedApiKey] = useState(() => apiKeys?.[0]?.key || "");
-  const [selectedModel, setSelectedModel] = useState(() => {
-    const cfg = initialStatus?.config;
-    return cfg?.model || cfg?.openai?.model || cfg?.providers?.["9router"]?.models?.[0]?.id || "";
-  });
+  const [selectedModel, setSelectedModel] = useState(() => configuredModel(initialStatus?.config));
   const initialPi = readPiModels(initialStatus?.config);
   const [selectedModels, setSelectedModels] = useState(() => initialPi?.ids || []);
   const [modelCaps, setModelCaps] = useState(() => initialPi?.caps || {});
@@ -91,8 +94,8 @@ export default function GenericCliToolCard({
                 setModelCaps(pi.caps);
               }
             } else {
-              const mod = cfg?.model || cfg?.openai?.model || cfg?.providers?.["9router"]?.models?.[0]?.id;
-              if (mod) setSelectedModel((prev) => prev || mod);
+      const mod = configuredModel(cfg);
+      if (mod) setSelectedModel((prev) => prev || mod);
             }
           }
         })
@@ -119,8 +122,8 @@ export default function GenericCliToolCard({
           setModelCaps(pi.caps);
         }
       } else {
-        const mod = cfg?.model || cfg?.openai?.model || cfg?.providers?.["9router"]?.models?.[0]?.id;
-        if (mod && !selectedModel) setSelectedModel(mod);
+      const mod = configuredModel(cfg);
+      if (mod && !selectedModel) setSelectedModel(mod);
       }
     } catch (error) {
       setStatus({ installed: false, error: error.message });
@@ -141,6 +144,8 @@ export default function GenericCliToolCard({
     if (typeof cfg.openai?.base_url === "string") return cfg.openai.base_url;
     if (typeof cfg.providers?.["9router"]?.base_url === "string") return cfg.providers["9router"].base_url;
     if (typeof cfg.providers?.["9router"]?.baseUrl === "string") return cfg.providers["9router"].baseUrl;
+    const local = perchRecord(cfg);
+    if (typeof local?.baseUrl === "string") return local.baseUrl;
     return "";
   };
 
@@ -156,6 +161,42 @@ export default function GenericCliToolCard({
   };
 
   const configStatus = getConfigStatus();
+
+  // Perch carries the BYOLM/TOS warning here; the other generic tools keep
+  // their current appearance (their notes are not rendered).
+  const renderNotes = () => {
+    if (tool.id !== "perch" || !tool.notes?.length) return null;
+    return (
+      <div className="flex flex-col gap-2">
+        {tool.notes.map((note, index) => {
+          const isWarning = note.type === "warning";
+          return (
+            <div
+              key={index}
+              className={`flex items-start gap-3 p-3 rounded-lg border ${
+                isWarning
+                  ? "bg-yellow-500/10 border-yellow-500/30"
+                  : "bg-blue-500/10 border-blue-500/30"
+              }`}
+            >
+              <span
+                className={`material-symbols-outlined text-lg ${isWarning ? "text-yellow-500" : "text-blue-500"}`}
+              >
+                {isWarning ? "warning" : "info"}
+              </span>
+              <p
+                className={`text-sm ${
+                  isWarning ? "text-yellow-600 dark:text-yellow-400" : "text-blue-600 dark:text-blue-400"
+                }`}
+              >
+                {note.text}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   const handleApply = async () => {
     setApplying(true);
@@ -286,6 +327,8 @@ export default function GenericCliToolCard({
         return "cargo install smelt";
       case "codewhale":
         return "cargo install codewhale";
+      case "perch":
+        return "npm install -g perchai-cli";
       default:
         return `npm install -g ${tool.id}`;
     }
@@ -372,6 +415,42 @@ export default function GenericCliToolCard({
             content: `# CodeWhale config — managed by 9Router\n\n[openai]\nbase_url = "${effectiveUrl}"\napi_key = "${key}"\nmodel = "${mod}"`,
           },
         ];
+      case "perch": {
+        // Never paste the dashboard placeholder into Perch's file.
+        const perchKey = key === "sk_9router" ? "" : key;
+        const perchUrl = (() => {
+          const u = effectiveUrl.replace(/\/+$/, "");
+          return u.endsWith("/v1") ? u : `${u}/v1`;
+        })();
+        return [
+          {
+            filename: "~/.perch/byo-local.json",
+            content: JSON.stringify(
+              {
+                version: 1,
+                records: [
+                  {
+                    userId: "local-device",
+                    providerId: "local",
+                    scope: "local",
+                    apiKeyCiphertext: perchKey || null,
+                    baseUrl: perchUrl,
+                    modelId: mod,
+                    models: [{ id: mod }],
+                    keyHint: perchKey ? `…${perchKey.slice(-4)}` : null,
+                    capabilityProfile: null,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    _managedBy: "9router",
+                  },
+                ],
+              },
+              null,
+              2
+            ),
+          },
+        ];
+      }
       default:
         return [];
     }
@@ -432,6 +511,7 @@ export default function GenericCliToolCard({
 
       {isExpanded && (
         <div className="mt-4 pt-4 border-t border-border flex flex-col gap-4">
+          {renderNotes()}
           {checking && (
             <div className="flex items-center gap-2 text-text-muted">
               <span className="material-symbols-outlined animate-spin">progress_activity</span>
