@@ -7,6 +7,7 @@ import BaseUrlSelect from "./BaseUrlSelect";
 import { rememberEndpoint } from "./cliEndpointPresets";
 import ApiKeySelect from "./ApiKeySelect";
 import { matchKnownEndpoint } from "./cliEndpointMatch";
+import { buildPerchManualConfig } from "./perchManualConfig";
 import { getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
 
 const PI_CONTEXT_WINDOWS = [200000, 400000, 600000, 1000000];
@@ -154,10 +155,9 @@ export default function GenericCliToolCard({
   const getConfigStatus = () => {
     if (!status?.installed) return null;
     if (!status.has9Router) return "not_configured";
-    if (currentBaseUrl && matchKnownEndpoint(currentBaseUrl, { tunnelPublicUrl, tailscaleUrl })) {
-      return "configured";
-    }
-    return "configured";
+    // A 9router-owned config pointing at an endpoint we do not recognise is
+    // "Other", not "Connected" — same rule as the sibling tool cards.
+    return matchKnownEndpoint(currentBaseUrl, { tunnelPublicUrl, tailscaleUrl }) ? "configured" : "other";
   };
 
   const configStatus = getConfigStatus();
@@ -415,42 +415,9 @@ export default function GenericCliToolCard({
             content: `# CodeWhale config — managed by 9Router\n\n[openai]\nbase_url = "${effectiveUrl}"\napi_key = "${key}"\nmodel = "${mod}"`,
           },
         ];
-      case "perch": {
+      case "perch":
         // Never paste the dashboard placeholder into Perch's file.
-        const perchKey = key === "sk_9router" ? "" : key;
-        const perchUrl = (() => {
-          const u = effectiveUrl.replace(/\/+$/, "");
-          return u.endsWith("/v1") ? u : `${u}/v1`;
-        })();
-        return [
-          {
-            filename: "~/.perch/byo-local.json",
-            content: JSON.stringify(
-              {
-                version: 1,
-                records: [
-                  {
-                    userId: "local-device",
-                    providerId: "local",
-                    scope: "local",
-                    apiKeyCiphertext: perchKey || null,
-                    baseUrl: perchUrl,
-                    modelId: mod,
-                    models: [{ id: mod }],
-                    keyHint: perchKey ? `…${perchKey.slice(-4)}` : null,
-                    capabilityProfile: null,
-                    createdAt: new Date().toISOString(),
-                    updatedAt: new Date().toISOString(),
-                    _managedBy: "9router",
-                  },
-                ],
-              },
-              null,
-              2
-            ),
-          },
-        ];
-      }
+        return buildPerchManualConfig({ baseUrl: effectiveUrl, apiKey: key, model: mod });
       default:
         return [];
     }

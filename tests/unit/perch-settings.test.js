@@ -158,4 +158,20 @@ describe("Perch settings route", () => {
     expect(res.status).toBe(500);
     expect(await fs.readFile(file, "utf8")).toBe("{ not json");
   });
+
+  it("rejects an unreadable body and writes nothing", async () => {
+    const res = await POST({ json: async () => { throw new Error("Unexpected token"); } });
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.message).toBe("Invalid JSON body");
+    await expect(fs.access(path.join(home, ".perch", "byo-local.json"))).rejects.toThrow();
+  });
+
+  it("rejects a baseUrl that is not http(s) and writes nothing", async () => {
+    for (const baseUrl of ["ftp://gw.test", "gw.test", "file:///etc/passwd", "not a url"]) {
+      const res = await POST(jsonRequest({ baseUrl, model: "m" }));
+      expect(res.status, baseUrl).toBe(400);
+      expect((await res.json()).error.message, baseUrl).toBe("baseUrl must be a valid http(s) URL");
+    }
+    await expect(fs.access(path.join(home, ".perch", "byo-local.json"))).rejects.toThrow();
+  });
 });

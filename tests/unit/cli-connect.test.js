@@ -176,6 +176,13 @@ describe("connect tool writers", () => {
     expect(tool("kilo").serverModel).toBeUndefined();
     expect(tool("pi").serverModel({ config: { providers: { "9router": { models: [{ id: "f" }] } } } })).toBe("f");
     expect(tool("pi").serverModel({ config: { providers: { other: { models: [{ id: "f" }] } } } })).toBeNull();
+    // Perch's model lives in its own BYOLM record, and only counts when the
+    // server reports 9router owns it.
+    const perchLocal = { scope: "local", providerId: "local", modelId: "cc/main" };
+    expect(tool("perch").serverModel({ has9Router: true, config: { records: [perchLocal] } })).toBe("cc/main");
+    expect(tool("perch").serverModel({ has9Router: false, config: { records: [perchLocal] } })).toBeNull();
+    expect(tool("perch").serverModel({ has9Router: true, config: { records: [{ scope: "cloud", providerId: "custom", modelId: "x" }] } })).toBeNull();
+    expect(tool("perch").serverModel({ has9Router: true, config: null })).toBeNull();
   });
 
   it("pi keeps other providers and writes the 9router model list", async () => {

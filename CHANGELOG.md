@@ -1,3 +1,8 @@
+# Unreleased
+
+## Features
+- **CLI Tools**: add Perch CLI (`perchai-cli`) as a managed tool — dashboard card and BYOLM settings route that read, write, and reset the `scope: "local"` record in `~/.perch/byo-local.json` (or `$PERCH_HOME`), leaving every other record untouched and never exposing a plaintext key on GET, plus a `9router connect --tools perch` writer and `perchai` alias
+
 # v0.5.111 (2026-10-26)
 
 ## Features
