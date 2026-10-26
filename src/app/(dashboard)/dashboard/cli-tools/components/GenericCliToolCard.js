@@ -7,7 +7,46 @@ import BaseUrlSelect from "./BaseUrlSelect";
 import { rememberEndpoint } from "./cliEndpointPresets";
 import ApiKeySelect from "./ApiKeySelect";
 import { matchKnownEndpoint } from "./cliEndpointMatch";
+import { buildPerchManualConfig } from "./perchManualConfig";
 import { getModelsByProviderId, PROVIDER_ID_TO_ALIAS } from "@/shared/constants/models";
+
+const PI_CONTEXT_WINDOWS = [200000, 400000, 600000, 1000000];
+const PI_MAX_TOKENS = [16000, 32000, 64000, 128000];
+const PI_DEFAULT_CAPS = { contextWindow: 200000, maxTokens: 64000 };
+const PI_CAP_LIMITS = { contextWindow: 2000000, maxTokens: 200000 };
+const formatTokens = (n) =>
+  n >= 1000000 ? `${+(n / 1000000).toFixed(2)}M` : `${Math.round(n / 1000)}k`;
+
+const sanitizeCap = (v, fallback, max) => {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 && n <= max ? n : fallback;
+};
+
+const capOptions = (values, current) =>
+  values.includes(current) ? values : [...values, current].sort((a, b) => a - b);
+
+const readPiModels = (cfg) => {
+  const list = cfg?.providers?.["9router"]?.models;
+  if (!Array.isArray(list) || list.length === 0) return null;
+  const caps = {};
+  const ids = list.map((m) => {
+    const id = typeof m === "string" ? m : m.id;
+    if (typeof m !== "string") {
+      caps[id] = {
+        contextWindow: sanitizeCap(m.contextWindow, PI_DEFAULT_CAPS.contextWindow, PI_CAP_LIMITS.contextWindow),
+        maxTokens: sanitizeCap(m.maxTokens, PI_DEFAULT_CAPS.maxTokens, PI_CAP_LIMITS.maxTokens),
+      };
+    }
+    return id;
+  });
+  return { ids, caps };
+};
+
+// Perch's config is Perch's own record shape: one scope=local/providerId=local
+// entry inside byo-local.json rather than a scalar baseUrl/model block.
+const perchRecord = (cfg) => (cfg?.records || []).find((r) => r.scope === "local" && r.providerId === "local");
+const configuredModel = (cfg) =>
+  cfg?.model || cfg?.openai?.model || cfg?.providers?.["9router"]?.models?.[0]?.id || perchRecord(cfg)?.modelId || "";
 
 export default function GenericCliToolCard({
   tool,
@@ -30,18 +69,10 @@ export default function GenericCliToolCard({
   const [message, setMessage] = useState(null);
   const [showInstallGuide, setShowInstallGuide] = useState(false);
   const [selectedApiKey, setSelectedApiKey] = useState(() => apiKeys?.[0]?.key || "");
-  const [selectedModel, setSelectedModel] = useState(() => {
-    const cfg = initialStatus?.config;
-    return cfg?.model || cfg?.openai?.model || cfg?.providers?.["9router"]?.models?.[0]?.id || "";
-  });
-  const [selectedModels, setSelectedModels] = useState(() => {
-    const cfg = initialStatus?.config;
-    const list = cfg?.providers?.["9router"]?.models;
-    if (Array.isArray(list) && list.length > 0) {
-      return list.map((m) => (typeof m === "string" ? m : m.id));
-    }
-    return [];
-  });
+  const [selectedModel, setSelectedModel] = useState(() => configuredModel(initialStatus?.config));
+  const initialPi = readPiModels(initialStatus?.config);
+  const [selectedModels, setSelectedModels] = useState(() => initialPi?.ids || []);
+  const [modelCaps, setModelCaps] = useState(() => initialPi?.caps || {});
   const [modalOpen, setModalOpen] = useState(false);
   const [showManualConfigModal, setShowManualConfigModal] = useState(false);
   const [customBaseUrl, setCustomBaseUrl] = useState("");
@@ -58,14 +89,14 @@ export default function GenericCliToolCard({
             setStatus(data);
             const cfg = data?.config;
             if (tool.id === "pi") {
-              const list = cfg?.providers?.["9router"]?.models;
-              if (Array.isArray(list) && list.length > 0) {
-                const ids = list.map((m) => (typeof m === "string" ? m : m.id));
-                setSelectedModels(ids);
+              const pi = readPiModels(cfg);
+              if (pi) {
+                setSelectedModels(pi.ids);
+                setModelCaps(pi.caps);
               }
             } else {
-              const mod = cfg?.model || cfg?.openai?.model || cfg?.providers?.["9router"]?.models?.[0]?.id;
-              if (mod) setSelectedModel((prev) => prev || mod);
+      const mod = configuredModel(cfg);
+      if (mod) setSelectedModel((prev) => prev || mod);
             }
           }
         })
@@ -86,14 +117,14 @@ export default function GenericCliToolCard({
       setStatus(data);
       const cfg = data?.config;
       if (tool.id === "pi") {
-        const list = cfg?.providers?.["9router"]?.models;
-        if (Array.isArray(list) && list.length > 0) {
-          const ids = list.map((m) => (typeof m === "string" ? m : m.id));
-          setSelectedModels(ids);
+        const pi = readPiModels(cfg);
+        if (pi) {
+          setSelectedModels(pi.ids);
+          setModelCaps(pi.caps);
         }
       } else {
-        const mod = cfg?.model || cfg?.openai?.model || cfg?.providers?.["9router"]?.models?.[0]?.id;
-        if (mod && !selectedModel) setSelectedModel(mod);
+      const mod = configuredModel(cfg);
+      if (mod && !selectedModel) setSelectedModel(mod);
       }
     } catch (error) {
       setStatus({ installed: false, error: error.message });
@@ -114,6 +145,8 @@ export default function GenericCliToolCard({
     if (typeof cfg.openai?.base_url === "string") return cfg.openai.base_url;
     if (typeof cfg.providers?.["9router"]?.base_url === "string") return cfg.providers["9router"].base_url;
     if (typeof cfg.providers?.["9router"]?.baseUrl === "string") return cfg.providers["9router"].baseUrl;
+    const local = perchRecord(cfg);
+    if (typeof local?.baseUrl === "string") return local.baseUrl;
     return "";
   };
 
@@ -122,13 +155,48 @@ export default function GenericCliToolCard({
   const getConfigStatus = () => {
     if (!status?.installed) return null;
     if (!status.has9Router) return "not_configured";
-    if (currentBaseUrl && matchKnownEndpoint(currentBaseUrl, { tunnelPublicUrl, tailscaleUrl })) {
-      return "configured";
-    }
-    return "configured";
+    // A 9router-owned config pointing at an endpoint we do not recognise is
+    // "Other", not "Connected" — same rule as the sibling tool cards.
+    return matchKnownEndpoint(currentBaseUrl, { tunnelPublicUrl, tailscaleUrl }) ? "configured" : "other";
   };
 
   const configStatus = getConfigStatus();
+
+  // Perch carries the BYOLM/TOS warning here; the other generic tools keep
+  // their current appearance (their notes are not rendered).
+  const renderNotes = () => {
+    if (tool.id !== "perch" || !tool.notes?.length) return null;
+    return (
+      <div className="flex flex-col gap-2">
+        {tool.notes.map((note, index) => {
+          const isWarning = note.type === "warning";
+          return (
+            <div
+              key={index}
+              className={`flex items-start gap-3 p-3 rounded-lg border ${
+                isWarning
+                  ? "bg-yellow-500/10 border-yellow-500/30"
+                  : "bg-blue-500/10 border-blue-500/30"
+              }`}
+            >
+              <span
+                className={`material-symbols-outlined text-lg ${isWarning ? "text-yellow-500" : "text-blue-500"}`}
+              >
+                {isWarning ? "warning" : "info"}
+              </span>
+              <p
+                className={`text-sm ${
+                  isWarning ? "text-yellow-600 dark:text-yellow-400" : "text-blue-600 dark:text-blue-400"
+                }`}
+              >
+                {note.text}
+              </p>
+            </div>
+          );
+        })}
+      </div>
+    );
+  };
 
   const handleApply = async () => {
     setApplying(true);
@@ -144,7 +212,12 @@ export default function GenericCliToolCard({
       };
 
       if (tool.id === "pi") {
-        payload.models = selectedModels.length > 0 ? selectedModels : ["provider/model-id"];
+        payload.models = (selectedModels.length > 0 ? selectedModels : ["provider/model-id"]).map((id) => ({
+          id,
+          name: id,
+          ...PI_DEFAULT_CAPS,
+          ...modelCaps[id],
+        }));
       } else {
         payload.model = selectedModel;
       }
@@ -192,6 +265,7 @@ export default function GenericCliToolCard({
     if (tool.id === "pi") {
       if (!selectedModels.includes(model.value)) {
         setSelectedModels((prev) => [...prev, model.value]);
+        setModelCaps((prev) => ({ ...prev, [model.value]: { ...PI_DEFAULT_CAPS, ...prev[model.value] } }));
       }
     } else {
       setSelectedModel(model.value);
@@ -211,11 +285,32 @@ export default function GenericCliToolCard({
     });
     if (allModels.length > 0) {
       setSelectedModels((prev) => Array.from(new Set([...prev, ...allModels])));
+      setModelCaps((prev) => {
+        const next = { ...prev };
+        allModels.forEach((id) => { next[id] ||= { ...PI_DEFAULT_CAPS }; });
+        return next;
+      });
     }
   };
 
   const handleRemoveModel = (modelToRemove) => {
     setSelectedModels((prev) => prev.filter((m) => m !== modelToRemove));
+    setModelCaps((prev) => {
+      const next = { ...prev };
+      delete next[modelToRemove];
+      return next;
+    });
+  };
+
+  const setModelCap = (modelId, key, value) => {
+    setModelCaps((prev) => ({
+      ...prev,
+      [modelId]: {
+        ...PI_DEFAULT_CAPS,
+        ...prev[modelId],
+        [key]: sanitizeCap(value, PI_DEFAULT_CAPS[key], PI_CAP_LIMITS[key]),
+      },
+    }));
   };
 
   const getInstallCommand = () => {
@@ -232,6 +327,8 @@ export default function GenericCliToolCard({
         return "cargo install smelt";
       case "codewhale":
         return "cargo install codewhale";
+      case "perch":
+        return "npm install -g perchai-cli";
       default:
         return `npm install -g ${tool.id}`;
     }
@@ -258,8 +355,8 @@ export default function GenericCliToolCard({
                     models: modelsList.map((id) => ({
                       id,
                       name: id,
-                      contextWindow: 128000,
-                      maxTokens: 16384,
+                      ...PI_DEFAULT_CAPS,
+                      ...modelCaps[id],
                     })),
                   },
                 },
@@ -318,6 +415,9 @@ export default function GenericCliToolCard({
             content: `# CodeWhale config — managed by 9Router\n\n[openai]\nbase_url = "${effectiveUrl}"\napi_key = "${key}"\nmodel = "${mod}"`,
           },
         ];
+      case "perch":
+        // Never paste the dashboard placeholder into Perch's file.
+        return buildPerchManualConfig({ baseUrl: effectiveUrl, apiKey: key, model: mod });
       default:
         return [];
     }
@@ -378,6 +478,7 @@ export default function GenericCliToolCard({
 
       {isExpanded && (
         <div className="mt-4 pt-4 border-t border-border flex flex-col gap-4">
+          {renderNotes()}
           {checking && (
             <div className="flex items-center gap-2 text-text-muted">
               <span className="material-symbols-outlined animate-spin">progress_activity</span>
@@ -477,21 +578,44 @@ export default function GenericCliToolCard({
                         {selectedModels.length === 0 ? (
                           <span className="text-xs text-text-muted italic">No models selected. Add models to use in Pi.</span>
                         ) : (
-                          selectedModels.map((modelId) => (
-                            <span
-                              key={modelId}
-                              className="inline-flex items-center gap-1.5 px-2 py-1 rounded bg-bg-secondary text-xs text-text-main border border-border"
-                            >
-                              <span>{modelId}</span>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveModel(modelId)}
-                                className="text-text-muted hover:text-red-500 rounded p-0.5"
+                          selectedModels.map((modelId) => {
+                            const caps = { ...PI_DEFAULT_CAPS, ...modelCaps[modelId] };
+                            return (
+                              <div
+                                key={modelId}
+                                className="flex w-full flex-wrap items-center gap-1.5 rounded border border-border bg-bg-secondary px-2 py-1 text-xs text-text-main"
                               >
-                                <span className="material-symbols-outlined text-[12px]">close</span>
-                              </button>
-                            </span>
-                          ))
+                                <span className="min-w-0 flex-1 basis-40 truncate">{modelId}</span>
+                                <select
+                                  value={caps.contextWindow}
+                                  onChange={(e) => setModelCap(modelId, "contextWindow", e.target.value)}
+                                  title="Context window"
+                                  className="shrink-0 rounded border border-border bg-surface px-1 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/50"
+                                >
+                                  {capOptions(PI_CONTEXT_WINDOWS, caps.contextWindow).map((n) => (
+                                    <option key={n} value={n}>{formatTokens(n)} ctx</option>
+                                  ))}
+                                </select>
+                                <select
+                                  value={caps.maxTokens}
+                                  onChange={(e) => setModelCap(modelId, "maxTokens", e.target.value)}
+                                  title="Max output tokens"
+                                  className="rounded border border-border bg-surface px-1 py-0.5 text-[11px] focus:outline-none focus:ring-1 focus:ring-primary/50"
+                                >
+                                  {capOptions(PI_MAX_TOKENS, caps.maxTokens).map((n) => (
+                                    <option key={n} value={n}>{formatTokens(n)} out</option>
+                                  ))}
+                                </select>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRemoveModel(modelId)}
+                                  className="text-text-muted hover:text-red-500 rounded p-0.5"
+                                >
+                                  <span className="material-symbols-outlined text-[12px]">close</span>
+                                </button>
+                              </div>
+                            );
+                          })
                         )}
                       </div>
                       <div className="flex flex-wrap items-center gap-2">

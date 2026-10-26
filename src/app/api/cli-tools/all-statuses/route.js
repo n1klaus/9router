@@ -20,6 +20,7 @@ import { GET as crushGet } from "../crush-settings/route";
 import { GET as forgeGet } from "../forge-settings/route";
 import { GET as smeltGet } from "../smelt-settings/route";
 import { GET as codewhaleGet } from "../codewhale-settings/route";
+import { GET as perchGet } from "../perch-settings/route";
 
 const STATUS_GETTERS = {
   claude: claudeGet,
@@ -41,14 +42,17 @@ const STATUS_GETTERS = {
   forge: forgeGet,
   smelt: smeltGet,
   codewhale: codewhaleGet,
+  perch: perchGet,
 };
 
-// Batch endpoint: gather all CLI tool statuses in one round-trip
-export async function GET() {
+// Batch endpoint: gather all CLI tool statuses in one round-trip.
+// `request` is forwarded so tools whose status depends on the dashboard origin
+// (perch's `_managedBy`/origin ownership check) can match it; the rest ignore it.
+export async function GET(request) {
   const entries = await Promise.all(
     Object.entries(STATUS_GETTERS).map(async ([toolId, getter]) => {
       try {
-        const res = await getter();
+        const res = await getter(request);
         const data = await res.json();
         return [toolId, data];
       } catch {
