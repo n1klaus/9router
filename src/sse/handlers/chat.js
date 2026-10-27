@@ -23,6 +23,7 @@ import { HTTP_STATUS } from "open-sse/config/runtimeConfig.js";
 import { detectFormatByEndpoint } from "open-sse/translator/formats.js";
 import { resolveSessionIdentity } from "open-sse/utils/sessionManager.js";
 import * as log from "../utils/logger.js";
+import { resolveUnhealthyCfg } from "@/shared/utils/unhealthyStatuses.js";
 import { updateProviderCredentials, checkAndRefreshToken } from "../services/tokenRefresh.js";
 import { getProjectIdForConnection } from "open-sse/services/projectId.js";
 import { stripModelContextMarker } from "open-sse/utils/modelMarkers.js";
@@ -133,10 +134,12 @@ export async function handleChat(request, clientRawRequest = null) {
         comboName: modelStr,
         judgeModel: comboStrategies[modelStr]?.judgeModel,
         tuning: comboStrategies[modelStr]?.fusionTuning,
+        healthCfg: resolveUnhealthyCfg(comboStrategies[modelStr] || {}, settings),
       });
     }
 
     const comboStickyLimit = settings.comboStickyRoundRobinLimit;
+    const healthCfg = resolveUnhealthyCfg(comboStrategies[modelStr] || {}, settings);
     const comboCfg = comboStrategies[modelStr] || {};
     log.info("CHAT", `Combo "${modelStr}" with ${augmentedModels.length} models (strategy: ${comboStrategy}, sticky: ${comboStickyLimit})`);
     return handleComboChat({
@@ -150,6 +153,7 @@ export async function handleChat(request, clientRawRequest = null) {
       comboName: modelStr,
       comboStrategy,
       comboStickyLimit,
+      healthCfg,
       sessionId,
       smartPolicy: comboCfg.smartPolicy || "smart",
       sessionSticky: comboCfg.sessionSticky !== false,
@@ -180,7 +184,8 @@ export async function handleChat(request, clientRawRequest = null) {
       ),
       log,
       comboName: modelStr,
-      comboStrategy: getActiveAdapterStrategy(requiredCapabilities, settings)
+      comboStrategy: getActiveAdapterStrategy(requiredCapabilities, settings),
+      healthCfg: resolveUnhealthyCfg((settings.comboStrategies || {})[modelStr] || {}, settings),
     });
   }
 
@@ -226,10 +231,12 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
           comboName: modelStr,
           judgeModel: comboStrategies[modelStr]?.judgeModel,
           tuning: comboStrategies[modelStr]?.fusionTuning,
+        healthCfg: resolveUnhealthyCfg(comboStrategies[modelStr] || {}, chatSettings),
         });
       }
 
       const comboStickyLimit = chatSettings.comboStickyRoundRobinLimit;
+      const healthCfg = resolveUnhealthyCfg(comboStrategies[modelStr] || {}, chatSettings);
       const comboCfg = comboStrategies[modelStr] || {};
       const nestedSession = resolveSessionIdentity({ headers: clientRawRequest?.headers, body });
       const nestedSessionId = nestedSession?.sessionId || null;
@@ -245,6 +252,7 @@ async function handleSingleModelChat(body, modelStr, clientRawRequest = null, re
         comboName: modelStr,
         comboStrategy,
         comboStickyLimit,
+        healthCfg,
         sessionId: nestedSessionId,
         smartPolicy: comboCfg.smartPolicy || "smart",
         sessionSticky: comboCfg.sessionSticky !== false,

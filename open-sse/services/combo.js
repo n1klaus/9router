@@ -6,6 +6,7 @@ import { checkFallbackError, formatRetryAfter } from "./accountFallback.js";
 import { unavailableResponse } from "../utils/error.js";
 import { getCapabilitiesForModel } from "../providers/capabilities.js";
 import { parseModel } from "./model.js";
+import { getSkippedModels, recordComboFailure, recordComboSuccess } from "./comboHealth.js";
 import { extractTextContent } from "../translator/formats/gemini.js";
 import { peekStreamForContent, reconstructStream, isNoRetryFinish } from "./emptyFailover.js";
 import {
@@ -33,6 +34,15 @@ async function peekComboResponse(result, log) {
 // Hard capabilities = input modalities; missing one drops request data (e.g. image
 // stripped). Must be prioritized. Soft (e.g. search) only degrades a feature.
 const HARD_CAPS = new Set(["vision", "pdf", "audioInput", "videoInput"]);
+
+// Format timeout in milliseconds to a human-readable string
+function formatTimeout(ms) {
+  if (ms == null) return "unknown";
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(1)}s`;
+  if (ms < 3600000) return `${(ms / 60000).toFixed(1)}m`;
+  return `${(ms / 3600000).toFixed(1)}h`;
+}
 
 // Prefixes used when flattening tool turns into plain prose for panel models.
 const TOOL_CALL_PREFIX = "[Called tools: ";
@@ -365,6 +375,7 @@ export async function handleComboChat({
   sessionSticky = true,
   confidenceThreshold = 0.8,
   resolveSmartChoice = null,
+  healthCfg = null,
 }) {
   let rotatedModels = models;
   let activeStickyModel = null;
@@ -462,15 +473,30 @@ export async function handleComboChat({
       rotatedModels = reordered;
     }
   }
-  
+
+  // Sticky failure memory: skip models that hit the unhealthy threshold recently.
+  const skipped = healthCfg ? getSkippedModels(comboName, rotatedModels, healthCfg) : [];
+  let attemptModels = rotatedModels;
+  if (skipped.length > 0) {
+    const filtered = rotatedModels.filter((m) => !skipped.includes(m));
+    const timeoutMs = healthCfg?.resetMs;
+    const timeoutStr = formatTimeout(timeoutMs);
+    if (filtered.length === 0) {
+      log.warn("COMBO", `All models skipped by health state, trying all anyway: ${skipped.join(", ")} (timeout: ${timeoutStr})`);
+    } else {
+      log.info("COMBO", `Skipping unhealthy: ${skipped.join(", ")} (timeout: ${timeoutStr})`);
+      attemptModels = filtered;
+    }
+  }
+
   let lastError = null;
   let earliestRetryAfter = null;
   let lastStatus = null;
   let requestScopedResult = null;
 
-  for (let i = 0; i < rotatedModels.length; i++) {
-    const modelStr = rotatedModels[i];
-    log.info("COMBO", `Trying model ${i + 1}/${rotatedModels.length}: ${modelStr}`);
+  for (let i = 0; i < attemptModels.length; i++) {
+    const modelStr = attemptModels[i];
+    log.info("COMBO", `Trying model ${i + 1}/${attemptModels.length}: ${modelStr}`);
 
     try {
       const result = await handleSingleModel(body, modelStr);
@@ -498,7 +524,7 @@ export async function handleComboChat({
         if (!peeked) {
           // Non-streaming (or non-SSE) response — not this peek's job. The zero-content
           // JSON check still applies on a non-final seat.
-          const isLastModel = i === rotatedModels.length - 1;
+          const isLastModel = i === attemptModels.length - 1;
           if (!isLastModel) {
             const contentType = result.headers?.get?.("content-type") || "";
             if (contentType.includes("application/json")) {
@@ -519,11 +545,13 @@ export async function handleComboChat({
             }
           }
 
+          if (healthCfg) recordComboSuccess(comboName, modelStr);
           log.info("COMBO", `Model ${modelStr} succeeded`);
           return result;
         }
 
         if (peeked.outcome === "content") {
+          if (healthCfg) recordComboSuccess(comboName, modelStr);
           log.info("COMBO", `Model ${modelStr} succeeded${peeked.timedOut ? " (peek deadline; committed)" : ""}`);
           return peeked.response;
         }
@@ -532,7 +560,7 @@ export async function handleComboChat({
         // empty class (content filter) or the last candidate — in which case return the
         // (empty) response as-is, preserving prior behaviour rather than manufacturing a 5xx.
         const reasonLabel = peeked.finishReason || "no-content";
-        const isLast = i === rotatedModels.length - 1;
+        const isLast = i === attemptModels.length - 1;
         if (isNoRetryFinish(peeked.finishReason) || isLast) {
           log.warn("COMBO", `Model ${modelStr} returned empty (${reasonLabel}) — ${isNoRetryFinish(peeked.finishReason) ? "no-retry class" : "last candidate"}, returning as-is`);
           return peeked.response;
@@ -599,6 +627,9 @@ export async function handleComboChat({
         continue;
       }
 
+      // Count toward this combo's unhealthy counter (statuses list filters what counts).
+      if (healthCfg) recordComboFailure(comboName, modelStr, result.status, healthCfg);
+
       // For transient errors (503/502/504), wait for cooldown before falling through
       // so a briefly-overloaded provider gets a chance to recover rather than being
       // skipped immediately (fixes: combo falls through on transient 503)
@@ -614,6 +645,7 @@ export async function handleComboChat({
       log.warn("COMBO", `Model ${modelStr} failed, trying next`, { status: result.status });
     } catch (error) {
       // Catch unexpected exceptions to ensure fallback continues
+      if (healthCfg) recordComboFailure(comboName, modelStr, null, healthCfg);
       if (comboStrategy === "smart" && sessionId && modelStr === activeStickyModel) {
         clearStickyComboSession(comboName, sessionId);
       }
@@ -817,8 +849,24 @@ function collectPanel(calls, { minPanel, stragglerGraceMs, panelHardTimeoutMs })
  * @param {Object} [options.tuning] - Override FUSION_DEFAULTS (minPanel, grace, timeout)
  * @returns {Promise<Response>}
  */
-export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning }) {
+export async function handleFusionChat({ body, models, handleSingleModel, log, comboName, judgeModel, tuning, healthCfg = null }) {
   const panel = Array.isArray(models) ? models.filter(Boolean) : [];
+  // Sticky failure memory: skip unhealthy panel models (mirrors handleComboChat).
+  let attemptPanel = panel;
+  if (healthCfg && panel.length > 0) {
+    const skipped = getSkippedModels(comboName, panel, healthCfg);
+    if (skipped.length > 0) {
+      const filtered = panel.filter((m) => !skipped.includes(m));
+      const timeoutMs = healthCfg?.resetMs;
+      const timeoutStr = formatTimeout(timeoutMs);
+      if (filtered.length > 0) {
+        log.info("FUSION", `Skipping unhealthy: ${skipped.join(", ")} (timeout: ${timeoutStr})`);
+        attemptPanel = filtered;
+      } else {
+        log.warn("FUSION", `All panel models skipped by health state, trying all anyway: ${skipped.join(", ")} (timeout: ${timeoutStr})`);
+      }
+    }
+  }
   if (panel.length === 0) {
     return new Response(
       JSON.stringify({ error: { message: "Fusion combo has no models" } }),
@@ -828,12 +876,17 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
 
   // A single-model fusion has nothing to fuse — just answer directly.
   if (panel.length === 1) {
-    return handleSingleModel(body, panel[0]);
+    const r = await handleSingleModel(body, panel[0]);
+    if (healthCfg) {
+      if (r && r.ok) recordComboSuccess(comboName, panel[0]);
+      else recordComboFailure(comboName, panel[0], r ? r.status : null, healthCfg);
+    }
+    return r;
   }
 
   const cfg = { ...FUSION_DEFAULTS, ...(tuning || {}) };
-  const minPanel = Math.min(Math.max(2, cfg.minPanel), panel.length);
-  const judge = judgeModel && judgeModel.trim() ? judgeModel.trim() : panel[0];
+  const minPanel = Math.min(Math.max(2, cfg.minPanel), attemptPanel.length);
+  const judge = judgeModel && judgeModel.trim() ? judgeModel.trim() : (attemptPanel[0] || panel[0]);
   log.info("FUSION", `Combo "${comboName}" | panel=${panel.length} [${panel.join(", ")}] | judge=${judge} | quorum=${minPanel}`);
 
   // 1. Fan out to the panel in parallel: non-streaming, tools stripped (we want prose).
@@ -851,7 +904,7 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   }
 
   const t0 = Date.now();
-  const calls = panel.map((m) => withTimeout(handleSingleModel(panelBody, m, true), cfg.panelHardTimeoutMs));
+  const calls = attemptPanel.map((m) => withTimeout(handleSingleModel(panelBody, m, true), cfg.panelHardTimeoutMs));
   const settled = await collectPanel(calls, { ...cfg, minPanel });
   log.info("FUSION", `fan-out collected in ${Date.now() - t0}ms`);
 
@@ -859,21 +912,23 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   const answers = [];
   for (let i = 0; i < settled.length; i++) {
     const res = settled[i];
-    const model = panel[i];
-    if (!res) { log.warn("FUSION", `Panel ${model} dropped (straggler/timeout)`); continue; }
-    if (res.__timeout) { log.warn("FUSION", `Panel ${model} timed out`); continue; }
-    if (res.__error) { log.warn("FUSION", `Panel ${model} threw`, { error: res.__error?.message || String(res.__error) }); continue; }
-    if (!res.ok) { log.warn("FUSION", `Panel ${model} failed`, { status: res.status }); continue; }
+    const model = attemptPanel[i];
+    if (!res) { if (healthCfg) recordComboFailure(comboName, model, null, healthCfg); log.warn("FUSION", `Panel ${model} dropped (straggler/timeout)`); continue; }
+    if (res.__timeout) { if (healthCfg) recordComboFailure(comboName, model, null, healthCfg); log.warn("FUSION", `Panel ${model} timed out`); continue; }
+    if (res.__error) { if (healthCfg) recordComboFailure(comboName, model, null, healthCfg); log.warn("FUSION", `Panel ${model} threw`, { error: res.__error?.message || String(res.__error) }); continue; }
+    if (!res.ok) { if (healthCfg) recordComboFailure(comboName, model, res.status, healthCfg); log.warn("FUSION", `Panel ${model} failed`, { status: res.status }); continue; }
     try {
       const json = await res.clone().json();
       const text = extractPanelText(json);
       if (text) {
+        if (healthCfg) recordComboSuccess(comboName, model);
         answers.push({ model, text });
         log.info("FUSION", `Panel ${model} ok (${text.length} chars)`);
       } else {
         log.warn("FUSION", `Panel ${model} returned empty content`);
       }
     } catch (e) {
+      if (healthCfg) recordComboFailure(comboName, model, null, healthCfg);
       log.warn("FUSION", `Panel ${model} unparseable`, { error: e.message || String(e) });
     }
   }
@@ -888,13 +943,23 @@ export async function handleFusionChat({ body, models, handleSingleModel, log, c
   }
   if (answers.length === 1) {
     log.info("FUSION", `Only ${answers[0].model} succeeded — answering directly (no fusion)`);
-    return handleSingleModel(body, answers[0].model);
+    const result = await handleSingleModel(body, answers[0].model);
+    if (healthCfg) {
+      if (result && result.ok) recordComboSuccess(comboName, answers[0].model);
+      else recordComboFailure(comboName, answers[0].model, result ? result.status : null, healthCfg);
+    }
+    return result;
   }
 
   // 4. Judge analyzes + writes one final answer (streams to client if requested).
   const judgeBody = appendUserTurn(body, buildJudgePrompt(answers));
   log.info("FUSION", `Judging ${answers.length} answers with ${judge}`);
-  return handleSingleModel(judgeBody, judge);
+  const judgeResult = await handleSingleModel(judgeBody, judge);
+  if (healthCfg) {
+    if (judgeResult && judgeResult.ok) recordComboSuccess(comboName, judge);
+    else recordComboFailure(comboName, judge, judgeResult ? judgeResult.status : null, healthCfg);
+  }
+  return judgeResult;
 }
 
 export {

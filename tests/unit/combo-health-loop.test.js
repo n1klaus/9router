@@ -85,10 +85,10 @@ describe("handleComboChat unhealthy skip", () => {
     const cfg = { threshold: 1, resetMs: 86400000, statuses: [] };
     const statusFor = (m) => (m === "p/bad" ? badRequest() : live());
     const first = await runStatus(["p/bad", "p/live"], cfg, statusFor);
-    expect(first.calls).toEqual(["p/bad"]); // 400 returns immediately, no fallback
-    expect(first.res.status).toBe(400);
+    expect(first.calls).toEqual(["p/bad", "p/live"]); // 400 advances to next member (request-scoped), no health count
+    expect(first.res.status).toBe(200);
     const second = await runStatus(["p/bad", "p/live"], cfg, statusFor);
-    expect(second.calls).toEqual(["p/bad"]); // still attempted: 400 was never counted
+    expect(second.calls).toEqual(["p/bad", "p/live"]); // still attempted: 400 was never counted
   });
 
   it("counts a transient 503 toward the skip threshold", async () => {
