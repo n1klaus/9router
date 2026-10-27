@@ -115,6 +115,12 @@ const PATTERN_THINKING = [
   { pattern: "*minimax-m3.1*", wire: "openai", levels: ["low", "medium", "high", "xhigh"] },
 ];
 
+// OpenAI documents reasoning.effort "max" for GPT-5.6 and GPT-6 (#5186). The codex rows
+// above already carry it; an OpenAI Compatible node serving the same ids gets the same
+// set, otherwise the "openai" format list (no max) clamps max to xhigh on the wire.
+const OPENAI_MAX_EFFORT_MODEL = /(?:^|\/)gpt-(?:5\.6|6)(?:[.-]|$)/i;
+const isOpenAICompatibleNode = (provider) => String(provider || "").startsWith("openai-compatible-");
+
 // Returns valid thinking levels for a model, or null when the model has no reasoning.
 // `wireFormat` names the wire the request goes out on; `providerFormat` is the
 // provider's declared thinking format. When `wireFormat` is supplied, the
@@ -135,6 +141,11 @@ export function getThinkingLevels(provider, model, wireFormat, providerFormat) {
     && (!entry.wire || wireMatches(entry.wire, wireFormat))
     && matchPattern(entry.pattern, model)
   );
+  // GPT-5.6 / GPT-6 on an OpenAI Compatible node keep "max" even though the
+  // openai format list has no max (it would clamp to xhigh).
+  const openAiMax = isOpenAICompatibleNode(provider) && OPENAI_MAX_EFFORT_MODEL.test(baseId)
+    ? CODEX_GPT_5_6_LEVELS
+    : null;
   let levels;
   if (wireFormat) {
     const effectiveFormat = resolveThinkingFormat({
@@ -142,9 +153,9 @@ export function getThinkingLevels(provider, model, wireFormat, providerFormat) {
       capsFormat: caps.thinkingFormat,
       targetFormat: wireFormat,
     });
-    levels = modelLevels || hit?.levels || FORMAT_LEVELS[effectiveFormat] || L.base;
+    levels = modelLevels || hit?.levels || openAiMax || FORMAT_LEVELS[effectiveFormat] || L.base;
   } else {
-    levels = modelLevels || hit?.levels || FORMAT_LEVELS[caps.thinkingFormat] || L.base;
+    levels = modelLevels || hit?.levels || openAiMax || FORMAT_LEVELS[caps.thinkingFormat] || L.base;
   }
   if (caps.thinkingCanDisable === false) levels = levels.filter((l) => l !== "none");
   return levels;

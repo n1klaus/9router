@@ -143,7 +143,15 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
 
   const clientRequestedStreaming = body.stream === true || sourceFormat === FORMATS.ANTIGRAVITY || sourceFormat === FORMATS.GEMINI || sourceFormat === FORMATS.GEMINI_CLI;
   const providerRequiresStreaming = PROVIDERS[provider]?.forceStream === true;
-  let stream = providerRequiresStreaming ? true : (body.stream !== false);
+  // OpenAI semantics: an omitted `stream` means non-streaming (JSON). The old
+  // default (`body.stream !== false`) split the pipeline on the same-format
+  // (openai -> openai) path: translation is a no-op there, so the absent field
+  // reached upstream as a JSON request while 9router framed the client reply as
+  // SSE and appended `data: [DONE]` — JSON-parsing clients (e.g. Perch's probe)
+  // then failed on their own response. Forced-stream providers and an explicit
+  // `Accept: text/event-stream` still stream (below), and the upstream body is
+  // kept in lockstep with the resolved decision.
+  let stream = providerRequiresStreaming ? true : (body.stream === true);
 
   // Image generation models require non-streaming (Google v1internal:generateContent)
   const modelType = getModelType(alias, model);
@@ -165,6 +173,22 @@ export async function handleChatCore({ body, modelInfo, credentials, log, onCred
   const clientPrefersSSE = acceptHeader.includes("text/event-stream");
   if (clientPrefersJson && !clientPrefersSSE && body.stream !== true && !providerRequiresStreaming) {
     stream = false;
+  }
+  // Mirror of the rule above: a client that asks for text/event-stream but
+  // omits `stream` gets SSE. Only the default can be overridden this way —
+  // an explicit `stream: false` still wins.
+  if (clientPrefersSSE && !clientPrefersJson && body.stream !== true && !providerRequiresStreaming) {
+    stream = true;
+  }
+
+  // Keep the upstream body in lockstep with the resolved decision: the
+  // same-format (openai -> openai) path passes the client body through
+  // untouched, so without this an accepted streaming decision never reaches
+  // upstream as `stream: true` and upstream answers JSON under an SSE-framed
+  // response. Copy, don't mutate — clientRawRequest.body must keep logging the
+  // client's own request.
+  if (stream === true && body.stream !== true) {
+    body = { ...body, stream: true };
   }
 
   const reqLogger = await createRequestLogger(sourceFormat, targetFormat, model);
