@@ -107,3 +107,9 @@ debug.log
 /@docs/
 /.omo/
 /.omp/
+/specs/
+/AGENTS.md
+/CONVENTIONS.md
+/problem_title.txt
+/sample.test.js
+/tests/unit/9router-*.test.js
