@@ -102,3 +102,8 @@ graphify-out/*
 start-dev-silent.cjs
 debug.log
 .scratch/
+
+# Local-only agent tooling artifacts — never publish
+/@docs/
+/.omo/
+/.omp/
